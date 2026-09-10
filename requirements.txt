@@ -9,7 +9,7 @@ google-genai>=0.3.0
 # Kokoro TTS (primary production TTS)
 kokoro>=0.9.4
 soundfile>=0.14.0
-numpy>=2.0.0
+numpy>=2.5.3
 
 # Testing
 pytest>=7.0.0

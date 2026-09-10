@@ -1,0 +1,57 @@
+# ================================
+# SECRETS - NEVER COMMIT
+# ================================
+.env
+.env.*
+!.env.example
+
+# ================================
+# PYTHON
+# ================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ================================
+# GENERATED MEDIA - NEVER COMMIT
+# ================================
+output/
+renders/
+artifacts/
+*.mp4
+*.wav
+*.mp3
+*.aac
+*.srt
+*.ass
+
+# ================================
+# LOCAL STATE
+# ================================
+.history/
+.local/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+
+# ================================
+# IDE / OS
+# ================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

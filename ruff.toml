@@ -1,0 +1,41 @@
+# Ruff configuration for the ASMR Story Shorts project.
+#
+# The project deliberately uses bare `except Exception` in phase-level error
+# handlers (see src/main.py) so a failure in one pipeline phase never takes
+# down the whole run. BLE001 is therefore ignored project-wide.
+#
+# The following rules are ignored because they flag established, deliberate
+# patterns in this codebase (not defects):
+#   PLW1510 - subprocess.run without check= is intentional in tests that
+#             accept multiple exit codes (validate_environment tests).
+#   RUF012  - mutable class-attribute defaults are pre-existing, intentional
+#             sets used as constant lookups.
+#   PERF102 - dict.values() micro-optimization in the asset selector
+#             (readability over micro-perf).
+#   EXE001  - scripts/ has shebangs for direct execution on dev machines;
+#             GitHub Actions runs them via `python scripts/...` so the exec
+#             bit is not required in the repo.
+line-length = 100
+target-version = "py311"
+
+[lint]
+ignore = [
+  "BLE001",
+  "PLW1510",
+  "RUF012",
+  "PERF102",
+  "EXE001",
+]
+
+[lint.per-file-ignores]
+# Test files may use asserts/pytest idioms freely.
+"tests/**" = [
+  "S101",
+  "F841",   # unused local vars in tests are often intentional placeholders
+  "S110",   # try/except/pass in tests is intentional (best-effort)
+  "ISC004", # implicit string concat in test collections is readable
+]
+# The TTS provider's best-effort exception swallowing is deliberate.
+"src/ai/tts_provider.py" = ["S110"]
+# schema.py's set() generator is clearer than a set comprehension.
+"src/content/schema.py" = ["C401"]

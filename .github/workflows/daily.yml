@@ -1,0 +1,167 @@
+name: Daily ASMR Story Reel
+
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: 'Publishing slot (1-4)'
+        required: false
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+      dry_run:
+        description: 'Run in dry run mode (skip publishing)'
+        required: false
+        default: 'false'
+        type: boolean
+      upload_artifact:
+        description: 'Upload final MP4 as artifact (debug only)'
+        required: false
+        default: 'false'
+        type: boolean
+
+  repository_dispatch:
+    types: [trigger-pipeline]
+    inputs:
+      slot:
+        description: 'Publishing slot'
+        required: false
+        default: '1'
+
+  schedule:
+    # Default schedule - override with cron-job.org for more control
+    - cron: '0 12 * * *'  # Daily at noon UTC
+
+# Never run more than one pipeline at a time: a concurrent run could both
+# publish a Reel (duplicate) and race on the git-backed history file.
+concurrency:
+  group: asmr-pipeline
+  cancel-in-progress: false
+
+env:
+  # Secrets (injected from GitHub Actions Secrets)
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+  META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+
+  # Non-secret configuration
+  AI_MODEL: gemini-3.5-flash-lite
+  TTS_MODEL: gemini-3.1-flash-tts-preview
+  TTS_PROVIDER: kokoro
+  KOKORO_VOICE: af_heart
+  KOKORO_SPEED: '1.0'
+  KOKORO_LANG: a
+  VIDEO_WIDTH: '1080'
+  VIDEO_HEIGHT: '1920'
+  VIDEO_FPS: '30'
+  TARGET_DURATION_SECONDS: '45'
+  MIN_DURATION_SECONDS: '30'
+  MAX_DURATION_SECONDS: '60'
+  LOG_LEVEL: INFO
+  STORY_LANGUAGE: en
+  CONTENT_STYLE: calm_mysterious_atmospheric
+  FACEBOOK_RETRY_COUNT: '3'
+  MAX_VISUALS_PER_VIDEO: '8'
+  ENABLE_AMBIENT_AUDIO: 'true'
+  ENABLE_SUBTITLES: 'true'
+  # Git-backed run history lives in data/ (see .gitignore: generated media
+  # is ignored, but data/run_history.jsonl is committed for idempotency).
+  DATA_DIR: data
+
+jobs:
+  generate-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Install FFmpeg and system deps for Kokoro (espeak-ng)
+      - name: Install FFmpeg and espeak-ng
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng
+
+      # 4. Install Python dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 5. Validate environment
+      - name: Validate environment
+        # Fails fast on missing secrets / bad config BEFORE burning TTS/model calls
+        run: python scripts/validate_environment.py
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+
+      # 6. Run the full pipeline (story -> TTS -> audio gate -> assets ->
+      #    subtitles -> render -> verify -> publish -> history)
+      - name: Run pipeline
+        run: |
+          python src/main.py
+        env:
+          # workflow_dispatch dry_run input controls publishing; scheduled and
+          # repository_dispatch runs always publish live.
+          DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+
+      # 7. Upload final MP4 as an artifact (DEBUG ONLY - opt-in)
+      - name: Upload final video artifact (debug)
+        if: inputs.upload_artifact == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video
+          path: output/final.mp4
+          if-no-files-found: warn
+          retention-days: 7
+
+      # 8. Cleanup temporary files (safe - no secrets)
+      - name: Cleanup temporary files
+        if: always()
+        run: |
+          rm -rf output/renders/*.tmp
+          echo "Cleanup complete"
+
+      # Never upload .env or secrets as artifacts
+      # Never echo secrets in logs
+
+  # Git-backed run history: commit data/run_history.jsonl back to the repo so
+  # duplicate detection works across cron runs. Runs in a SEPARATE job with
+  # if: always() so a history push failure can never fail the main pipeline.
+  persist-history:
+    needs: generate-and-publish
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Commit run history
+        run: |
+          git config user.name "asmr-pipeline-bot"
+          git config user.email "actions@github.com"
+          git add data/run_history.jsonl
+          if git diff --cached --quiet; then
+            echo "No history changes to commit"
+          else
+            git commit -m "chore: update run history [skip ci]"
+            git push
+            echo "History committed"
+          fi
+        # Don't fail the pipeline if the history push fails (race, permissions);
+        # duplicate detection degrades gracefully to "no history".
+        continue-on-error: true

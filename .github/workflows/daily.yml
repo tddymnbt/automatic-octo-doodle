@@ -119,7 +119,7 @@ jobs:
       # 7. Upload final MP4 as an artifact (DEBUG ONLY - opt-in)
       - name: Upload final video artifact (debug)
         if: inputs.upload_artifact == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: final-video
           path: output/final.mp4

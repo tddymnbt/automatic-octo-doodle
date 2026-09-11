@@ -148,6 +148,7 @@ def main() -> int:
 
     # Phase 4: Validate audio (hard gate — no video from unusable audio)
     print(f"[4/{TOTAL_PHASES}] Validating audio...")
+    actual_audio_duration: float = story.estimate_duration_seconds()
     try:
         from src.audio.validator import validate_audio
 
@@ -161,13 +162,28 @@ def main() -> int:
                 logger.error(f"Audio validation failed: {err}")
                 print(f"  ✗ {err}")
             return 1
-        print(f"  ✓ Audio valid: duration={validation.info.get('duration', 0):.1f}s, "
+        actual_audio_duration = validation.info.get("duration", actual_audio_duration)
+        print(f"  ✓ Audio valid: duration={actual_audio_duration:.1f}s, "
               f"RMS={validation.info.get('rms', 0):.4f}")
 
     except Exception as e:
         logger.error(f"Audio validation error: {e}")
         print(f"  ✗ Audio validation error: {e}")
         return 1
+
+    # Phase 4b: Align scene durations to actual audio length
+    # The AI estimates durations from word count (150 WPM), but the TTS
+    # provider renders at its own pace. Scale scenes proportionally so the
+    # visual track matches the narration, preventing -shortest truncation.
+    estimated_duration = story.estimate_duration_seconds()
+    if estimated_duration > 0 and actual_audio_duration > 0:
+        scale = actual_audio_duration / estimated_duration
+        for scene in story.scenes:
+            scene.duration_seconds = round(scene.duration_seconds * scale, 2)
+        logger.info(
+            f"Scene durations scaled {estimated_duration:.1f}s → "
+            f"{actual_audio_duration:.1f}s (factor {scale:.3f})"
+        )
 
     # Phase 5: Select visuals
     print(f"[5/{TOTAL_PHASES}] Selecting visual assets...")
@@ -197,13 +213,41 @@ def main() -> int:
 
         subtitle_gen = SubtitleGenerator()
         subtitle_path = Path("output") / "subtitles.srt"
-        subtitle_gen.save_srt(story.narration, subtitle_path, total_duration=story.estimate_duration_seconds())
+        subtitle_gen.save_srt(story.narration, subtitle_path, total_duration=actual_audio_duration)
         print(f"  ✓ Subtitles generated: {subtitle_path}")
 
     except Exception as e:
         logger.error(f"Subtitle generation error: {e}")
         print(f"  ✗ Subtitle generation error: {e}")
         return 1
+
+    # Phase 6b: Select ambient audio (matching story categories)
+    ambient_audio_path: Path | None = None
+    if settings.enable_ambient_audio:
+        print(f"[6b/{TOTAL_PHASES}] Selecting ambient audio...")
+        try:
+            from src.assets.ambient import AmbientSelector
+
+            selector = AmbientSelector()
+            ambient_selection = None
+            if story is None:
+                logger.error("Story not available for ambient selection")
+                print("  ⚠ Story not available for ambient selection")
+            else:
+                ambient_selection = selector.select_ambient([s.category for s in story.scenes])
+            ambient_path = ambient_selection.path if ambient_selection else None
+            if ambient_path is not None:
+                ambient_audio_path = ambient_path
+                graded = ambient_selection.graded if ambient_selection else "none"
+                print(
+                    f"  ✓ Ambient selected: {ambient_path.name} "
+                    f"(match: {graded})"
+                )
+            else:
+                print(f"  ⚠ No ambient audio found in {selector._dir}")
+        except Exception as e:
+            logger.error(f"Ambient selection error: {e}")
+            print(f"  ⚠ Ambient selection skipped: {e}")
 
     # Phase 7: Render video via MediaService (composition + verification layer)
     print(f"[7/{TOTAL_PHASES}] Rendering video...")
@@ -228,6 +272,7 @@ def main() -> int:
             narration_audio=audio_path,
             subtitle_file=subtitle_path,
             output_path=video_path,
+            ambient_audio=ambient_audio_path,
         )
         print(f"  ✓ Video rendered: {video_path}")
 

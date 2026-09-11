@@ -93,26 +93,40 @@ Narration: {narration}"""
         language: str = "en",
         content_style: str = "calm_mysterious_atmospheric",
         target_duration: int = 45,
+        recent_titles: list[str] | None = None,
     ) -> str:
         """Generate the story creation prompt.
-        
+
         Args:
             language: Story language
             content_style: Style description
             target_duration: Target duration in seconds
-            
+            recent_titles: Titles to avoid (already published stories)
+
         Returns:
             Formatted prompt string
         """
         # Estimate words based on duration (150 wpm for ASMR)
         word_count = int(target_duration * 150 / 60)
-        
-        return cls.STORY_USER.format(
+
+        prompt = cls.STORY_USER.format(
             language=language,
             content_style=content_style,
             target_duration=target_duration,
             word_count=word_count,
         )
+
+        # Append recent titles to avoid if provided
+        if recent_titles:
+            titles_block = "\n".join(f"- {t}" for t in recent_titles)
+            prompt += (
+                "\n\nIMPORTANT: The following titles have already been used. "
+                "Generate a completely different title — do NOT reuse or "
+                "closely paraphrase any of these:\n"
+                f"{titles_block}"
+            )
+
+        return prompt
     
     @classmethod
     def safety_prompt(cls, title: str, narration: str) -> str:

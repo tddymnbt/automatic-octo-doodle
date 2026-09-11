@@ -200,19 +200,34 @@ class TestLivePublish:
             "message": "published",
         }
 
-        mock_session.post.side_effect = [start_resp, finish_resp]
-        mock_session.put.return_value = upload_resp
+        mock_session.post.side_effect = [start_resp, upload_resp, finish_resp]
+        # Mock the verification GET call
+        verify_resp = MagicMock(status_code=200)
+        verify_resp.json.return_value = {
+            "id": "POST456",
+            "is_published": True,
+            "permalink_url": "https://www.facebook.com/reel/POST456",
+            "privacy": {"value": "EVERYONE"},
+            "object_id": "VID001",
+        }
+        mock_session.get.return_value = verify_resp
 
         result = pub.publish(video_path=video, story=story)
 
         assert result.published is True
         assert result.post_id == "POST456"
         assert result.video_id == "VID001"
-        assert mock_session.post.call_count == 2
-        mock_session.put.assert_called_once()
-        put_args = mock_session.put.call_args
-        assert "rupload.facebook.com" in put_args[0][0]
-        assert "OAuth tok_secret_123" in put_args[1]["headers"]["Authorization"]
+        # Verification GET must use the composite page_id_post_id format
+        # (bare post IDs are rejected by Graph API v2.4+).
+        get_args = mock_session.get.call_args_list
+        assert get_args, "verification GET should have been called"
+        assert "PAGE123_POST456" in get_args[0][0][0]
+        # Call indices: 0=START, 1=rupload binary, 2=FINISH (verification is GET, not POST)
+        assert mock_session.post.call_count == 3
+        post_args = mock_session.post.call_args_list
+        # Call 0: START, Call 1: rupload binary (POST), Call 2: FINISH
+        assert "rupload.facebook.com" in post_args[1][0][0]
+        assert "OAuth tok_secret_123" in post_args[1][1]["headers"]["Authorization"]
 
     def test_publish_custom_title_and_description(self, tmp_path):
         """Custom title and description override story-based caption."""
@@ -228,14 +243,24 @@ class TestLivePublish:
         finish_resp = MagicMock(status_code=200)
         finish_resp.json.return_value = {"success": True, "post_id": "P2", "message": "ok"}
 
-        mock_session.post.side_effect = [start_resp, finish_resp]
-        mock_session.put.return_value = upload_resp
+        mock_session.post.side_effect = [start_resp, upload_resp, finish_resp]
+        # Mock the verification GET call
+        verify_resp = MagicMock(status_code=200)
+        verify_resp.json.return_value = {
+            "id": "P2",
+            "is_published": True,
+            "permalink_url": "https://www.facebook.com/reel/P2",
+            "privacy": {"value": "EVERYONE"},
+            "object_id": "V2",
+        }
+        mock_session.get.return_value = verify_resp
 
         result = pub.publish(video_path=video, title="My Reel", description="Custom desc")
         assert result.published is True
         assert result.post_id == "P2"
 
-        finish_call = mock_session.post.call_args_list[1]
+        # Call indices: 0=START, 1=rupload binary, 2=FINISH, 3=verification GET
+        finish_call = mock_session.post.call_args_list[2]
         assert finish_call[1]["params"]["title"] == "My Reel"
         assert finish_call[1]["params"]["description"] == "Custom desc"
 
@@ -347,8 +372,7 @@ class TestLivePublish:
         finish_resp = MagicMock(status_code=200)
         finish_resp.json.return_value = {"success": True}  # missing post_id
 
-        pub.session.post.side_effect = [start_resp, finish_resp]
-        pub.session.put.return_value = upload_resp
+        pub.session.post.side_effect = [start_resp, upload_resp, finish_resp]
 
         with pytest.raises(FacebookPublishError, match="post_id"):
             pub.publish(video_path=video)
@@ -401,3 +425,80 @@ class TestFactoryDefaults:
             assert pub.page_id == "PAGE42"
             assert pub.graph_version == "v24.0"
             assert pub.retry_count == 5
+
+
+class TestVerificationCompositeID:
+    """Verification GET must use the composite page_id_post_id format.
+
+    A bare post ID routes to the deprecated singular-statuses endpoint
+    (Graph API error 12), so the publisher must prefix it with the Page ID.
+    """
+
+    def _publisher(self):
+        return ReelsPublisher(
+            dry_run=False,
+            page_id="PAGE123",
+            access_token="tok",
+            graph_version="v26.0",
+            session=MagicMock(),
+        )
+
+    def _ok_resp(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "id": "PAGE123_12345",
+            "is_published": True,
+            "permalink_url": "https://www.facebook.com/reel/12345",
+            "privacy": {"value": "EVERYONE"},
+            "object_id": "VID1",
+        }
+        return resp
+
+    def test_bare_post_id_prefixed_with_page(self):
+        """A bare post ID must be queried as {page_id}_{post_id}."""
+        pub = self._publisher()
+        resp = self._ok_resp()
+        pub.session.get.return_value = resp
+
+        result = pub._verify_public_reel("12345")
+
+        assert result.is_public is True
+        called_url = pub.session.get.call_args[0][0]
+        assert called_url.endswith("PAGE123_12345")
+
+    def test_composite_post_id_not_double_prefixed(self):
+        """An already-composite post ID must not be prefixed again."""
+        pub = self._publisher()
+        resp = self._ok_resp()
+        resp.json.return_value = {
+            "id": "PAGE123_67890",
+            "is_published": True,
+            "permalink_url": "https://www.facebook.com/reel/67890",
+            "privacy": {"value": "EVERYONE"},
+        }
+        pub.session.get.return_value = resp
+
+        result = pub._verify_public_reel("PAGE123_67890")
+
+        assert result.is_public is True
+        called_url = pub.session.get.call_args[0][0]
+        assert called_url.endswith("PAGE123_67890")
+
+    def test_non_200_reports_graph_error_detail(self):
+        """A non-200 verification response must include the Graph API error."""
+        pub = self._publisher()
+        err_resp = MagicMock(status_code=400)
+        err_resp.json.return_value = {
+            "error": {
+                "code": 100,
+                "message": "Invalid parameter",
+                "type": "OAuthException",
+            }
+        }
+        pub.session.get.return_value = err_resp
+
+        result = pub._verify_public_reel("12345")
+
+        assert result.is_public is False
+        assert "400" in result.reason
+        assert "Invalid parameter" in result.reason

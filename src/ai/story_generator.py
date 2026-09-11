@@ -135,22 +135,37 @@ class StoryGenerator:
     
     def _call_gemini(self, language: str, content_style: str) -> StoryData:
         """Call Gemini API to generate a story.
-        
+
         Args:
             language: Story language
             content_style: Content style
-            
+
         Returns:
             Parsed StoryData
-            
+
         Raises:
             GeminiClientError: API call failed
         """
+        # Load recent published titles to avoid duplicates
+        recent_titles: list[str] = []
+        try:
+            from src.history.store import HistoryStore
+
+            history = HistoryStore()
+            for record in history.load_history():
+                if record.story_title:
+                    recent_titles.append(record.story_title)
+            # Keep last 20 to bound prompt size
+            recent_titles = recent_titles[-20:]
+        except Exception:
+            logger.debug("Could not load history for title dedup; continuing without")
+
         # Build prompt
         user_prompt = StoryPrompts.story_prompt(
             language=language,
             content_style=content_style,
             target_duration=settings.target_duration_seconds,
+            recent_titles=recent_titles or None,
         )
         
         # Call API

@@ -107,6 +107,7 @@ class Settings:
     project_root: Path = field(default_factory=lambda: Path(__file__).parent.parent)
     output_dir: Path = field(default_factory=lambda: Path(_get_env("OUTPUT_DIR", "output")))
     assets_dir: Path = field(default_factory=lambda: Path(_get_env("ASSETS_DIR", "assets/backgrounds")))
+    ambient_dir: Path = field(default_factory=lambda: Path(_get_env("AMBIENT_DIR", "assets/ambient")))
     data_dir: Path = field(default_factory=lambda: Path(_get_env("DATA_DIR", "data")))
     
     def has_secret(self, name: str) -> bool:

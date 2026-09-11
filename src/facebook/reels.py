@@ -108,6 +108,14 @@ class PublishResult:
         }
 
 
+@dataclass
+class ReelVerification:
+    """Result of a Reel public accessibility check."""
+    is_public: bool
+    reason: str
+    permalink: str = ""
+
+
 class ReelsPublisher:
     """Publishes validated Reels MP4s to a Facebook Page via the Graph API.
 
@@ -351,12 +359,17 @@ class ReelsPublisher:
         return video_id, upload_url
 
     def _upload_binary(self, upload_url: str, video: Path) -> None:
-        """Step 2: upload the video binary to the rupload URL."""
+        """Step 2: upload the video binary to the rupload URL.
+
+        Meta's Reels resumable upload requires a POST (not PUT) to the
+        upload_url returned by the START phase, with raw bytes and
+        offset/file_size headers.
+        """
         size = video.stat().st_size
 
         def attempt() -> bytes:
             with open(video, "rb") as f:
-                resp = self.session.put(
+                resp = self.session.post(
                     upload_url,
                     data=f,
                     headers={
@@ -407,6 +420,19 @@ class ReelsPublisher:
                 f"Reels publish did not return a post_id: {data}"
             )
 
+        # Verify the Reel is actually publicly accessible.
+        # The FINISH response may return success even if the Reel
+        # is not yet visible to non-admins (Reels-specific behavior).
+        verification = self._verify_public_reel(post_id)
+        if not verification.is_public:
+            logger.warning(
+                f"Reel {post_id} created but may not be publicly accessible: "
+                f"{verification.reason}"
+            )
+            # Don't fail the pipeline — log and continue. The Reel may become
+            # public shortly after creation, or the verification may be
+            # conservative. The post_id is returned for manual follow-up.
+
         logger.info(f"Reel published: post_id={post_id}")
         return PublishResult(
             published=True,
@@ -414,6 +440,77 @@ class ReelsPublisher:
             video_id=video_id,
             message=message or "published",
         )
+
+    def _verify_public_reel(self, post_id: str) -> ReelVerification:
+        """Check if a published Reel is accessible to non-admins.
+
+        Makes a Graph API call to fetch the post's published status and
+        permalink. Returns a ReelVerification with the result.
+
+        Graph API v2.4+ requires the composite ``{page_id}_{post_id}``
+        format to query a Page post; a bare post ID routes to the
+        deprecated singular-statuses endpoint and returns error 12.
+        """
+        # Some endpoints return the full composite ID; avoid double-prefixing.
+        object_id = post_id if "_" in post_id else f"{self.page_id}_{post_id}"
+        url = f"{self._graph_url()}/{object_id}"
+        params = {
+            "fields": "id,is_published,permalink_url,privacy,object_id",
+            "access_token": self.access_token,
+        }
+        try:
+            resp = self.session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code != 200:
+                error_detail = self._error_from_response(resp)
+                return ReelVerification(
+                    is_public=False,
+                    reason=f"Verification GET failed: {resp.status_code} — {error_detail}",
+                )
+            data = resp.json()
+            if not isinstance(data, dict):
+                return ReelVerification(
+                    is_public=False,
+                    reason="Verification response not a dict",
+                )
+
+            is_published = bool(data.get("is_published", True))
+            permalink = data.get("permalink_url", "")
+            privacy = data.get("privacy", {})
+
+            # If explicitly not published, it's not public.
+            if not is_published:
+                return ReelVerification(
+                    is_public=False,
+                    reason="is_published=false",
+                )
+
+            # If privacy restricts visibility (e.g., custom, friends), not public.
+            privacy_value = privacy.get("value", "") if isinstance(privacy, dict) else ""
+            if privacy_value and privacy_value != "EVERYONE":
+                return ReelVerification(
+                    is_public=False,
+                    reason=f"privacy={privacy_value}",
+                )
+
+            # If we got a permalink and it's published with no privacy
+            # restriction, consider it public.
+            if permalink and is_published:
+                return ReelVerification(
+                    is_public=True,
+                    reason="verified public",
+                    permalink=permalink,
+                )
+
+            # Ambiguous — treat as not verified public.
+            return ReelVerification(
+                is_public=False,
+                reason="missing permalink or ambiguous response",
+            )
+        except Exception as e:
+            return ReelVerification(
+                is_public=False,
+                reason=f"Verification error: {type(e).__name__}",
+            )
 
     def _parse_json(self, resp: requests.Response) -> dict:
         """Parse a JSON response body safely."""

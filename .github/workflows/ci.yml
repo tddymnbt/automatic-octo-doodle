@@ -45,13 +45,13 @@ jobs:
 
       - name: Validate project structure (no secrets required)
         # validate_environment fails on missing secrets; only run the
-        # structure/config checks that don't need credentials.
+        # structure/config checks that don't need credentials. Avoid
+        # load_dotenv() with no args — when running via `python - <<'PY'`
+        # there is no backing file frame and find_dotenv() asserts.
         run: |
           python - <<'PY'
           import sys
           sys.path.insert(0, ".")
-          from dotenv import load_dotenv
-          load_dotenv()
           from src.config import settings
           issues = settings.validate_config()
           if issues:

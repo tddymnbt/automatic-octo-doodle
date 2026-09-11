@@ -86,17 +86,54 @@ class VideoRenderer:
         self.pixel_format = pixel_format
         self.enable_subtitles = enable_subtitles
         
-        # Check FFmpeg availability
         self._ffmpeg_path = self._find_ffmpeg()
-        logger.info(f"Video renderer initialized: {width}x{height}@{fps}fps, subtitles={'yes' if enable_subtitles else 'no'}")
-    
+        # Whether the subtitles (libass) filter is available. Probed lazily on
+        # first render and cached, so constructing a renderer doesn't shell out
+        # (keeps unit tests that mock subprocess.run predictable).
+        self._subtitles_available: bool | None = None
+
+    def _subtitles_supported(self) -> bool:
+        """Return True if the FFmpeg build provides the subtitles filter.
+
+        Some Homebrew FFmpeg builds omit libass; degrade gracefully rather
+        than fail the whole render. CI's apt FFmpeg (and most distro builds)
+        ship it. Result is cached after the first probe.
+        """
+        if self._subtitles_available is None:
+            self._subtitles_available = self._has_filter("subtitles")
+            if self.enable_subtitles and not self._subtitles_available:
+                logger.warning(
+                    "FFmpeg build lacks the 'subtitles' filter (no libass); "
+                    "rendering WITHOUT burned-in subtitles. Install a libass-"
+                    "enabled FFmpeg to restore subtitle support."
+                )
+        return self._subtitles_available
+
     def _find_ffmpeg(self) -> str:
         """Find FFmpeg executable."""
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             raise FFmpegNotFoundError("FFmpeg not found in PATH")
         return ffmpeg
-    
+
+    def _has_filter(self, name: str) -> bool:
+        """Return True if the FFmpeg build provides the given filter."""
+        try:
+            result = subprocess.run(
+                [self._ffmpeg_path, "-hide_banner", "-filters"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return False
+        # -filters lines look like: "  .. subtitles       V->V  Convert ..."
+        # Match the filter name as a standalone token in the line.
+        return any(
+            name in line.split()
+            for line in result.stdout.splitlines()
+        )
+
     def render(
         self,
         story: StoryData,
@@ -345,9 +382,10 @@ class VideoRenderer:
             ambient_audio: Optional ambient audio
             ambient_volume: Ambient volume level
         """
-        # Build video filter list; subtitle burn only if enabled
+        # Build video filter list; subtitle burn only if the FFmpeg build
+        # actually provides the subtitles filter (libass).
         video_filters: list[str] = []
-        if self.enable_subtitles:
+        if self.enable_subtitles and self._subtitles_available:
             # Pass the absolute subtitle path to ffmpeg's subtitles filter.
             # FFmpeg resolves the path relative to the PROCESS CWD, not the
             # temp dir, so we must use an absolute path. Escape quote + backslash
@@ -390,12 +428,21 @@ class VideoRenderer:
             "-map", "[aout]",
         ]
         if video_filters:
+            # Always pin the target pixel format in the filter chain too —
+            # -pix_fmt alone can be overridden by full-range input metadata
+            # (yuvj420p). format= yields a deterministic yuv420p stream.
+            video_filters.append(f"format={self.pixel_format}")
             cmd += ["-vf", ",".join(video_filters)]
         cmd += [
             "-c:v", self.video_codec,
             "-pix_fmt", self.pixel_format,
+            # Set standard metadata so the output is limited-range (tv),
+            # matching the media verification gate's expected yuv420p.
+            "-color_range", "tv",
+            "-colorspace", "bt709",
             "-r", str(self.fps),
             "-c:a", self.audio_codec,
+            "-ar", "48000",  # Resample all mixes to 48kHz (Facebook/Reels + gate)
             "-b:a", "128k",
             "-preset", "medium",
             "-crf", "23",

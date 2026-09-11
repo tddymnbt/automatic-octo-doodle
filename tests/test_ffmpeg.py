@@ -189,6 +189,9 @@ class TestRenderFinalVideo:
         mock_run.return_value = mock_result
         
         renderer = VideoRenderer()
+        # Declare subtitles supported to test the burning path directly
+        # (avoids an extra subprocess probe in the mocked subprocess.run).
+        renderer._subtitles_available = True
         
         concat_file = tmp_path / "concat.txt"
         concat_file.write_text("file 'seg1.mp4'\nfile 'seg2.mp4'")
@@ -217,6 +220,45 @@ class TestRenderFinalVideo:
         assert "subtitles" in " ".join(cmd)
         # The subtitle path must be absolute (ffmpeg resolves relative to CWD)
         assert str(subtitle.resolve()) in " ".join(cmd)
+
+    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.subprocess.run")
+    def test_render_final_video_skips_subtitles_when_unsupported(
+        self, mock_run, mock_which, tmp_path
+    ):
+        """Should skip subtitle burning when the filter is unavailable."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = (
+            "Filters:\n"
+            "  .. null             V->V       Pass the source unchanged\n"
+        )
+        mock_run.return_value = mock_result
+
+        renderer = VideoRenderer()
+        assert renderer._subtitles_supported() is False
+
+        concat_file = tmp_path / "concat.txt"
+        concat_file.write_text("file 'seg1.mp4'\n")
+        narration = tmp_path / "narration.wav"
+        narration.write_bytes(b"fake audio")
+        subtitle = tmp_path / "subs.srt"
+        subtitle.write_text("1\n00:00:00,000 --> 00:00:02,000\nHello")
+        output = tmp_path / "output.mp4"
+
+        renderer._render_final_video(
+            concat_file=concat_file,
+            narration_audio=narration,
+            subtitle_file=subtitle,
+            output_path=output,
+            ambient_audio=None,
+            ambient_volume=0.1,
+        )
+
+        # Exactly one ffmpeg invocation (the probe) plus the render = the two
+        # calls; both returned success.
+        cmd = mock_run.call_args_list[-1][0][0]
+        assert "subtitles" not in " ".join(cmd)
 
 
 class TestValidateVideo:

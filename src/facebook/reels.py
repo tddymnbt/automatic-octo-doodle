@@ -89,6 +89,7 @@ class PublishResult:
     post_id: str = ""
     video_id: str = ""
     message: str = ""
+    attempts: int = 1
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -102,6 +103,7 @@ class PublishResult:
             "post_id": self.post_id,
             "video_id": self.video_id,
             "message": self.message,
+            "attempts": self.attempts,
             "errors": self.errors,
         }
 

@@ -186,12 +186,17 @@ Facebook Page
 - [x] Full suite: 322/322 pass; ruff clean on all new and modified files
 
 ### Phase 14 — Final E2E + Deploy Docs ✅
-- [x] Live E2E verification: 322/322 tests pass, ruff clean, all workflow YAML valid, all imports resolve, no `.env` tracked in git
+- [x] Live E2E verification: 323/323 tests pass, ruff clean, all workflow YAML valid, all imports resolve, no `.env` tracked in git
+- [x] Full dry-run pipeline run verified end-to-end: all 8 phases complete (story → TTS → audio gate → assets → subtitles → render → verify → publish-dry-run)
+- [x] **Bug fixed (E2E):** subtitle rendering failed on Homebrew FFmpeg (lacks libass) — added lazy `subtitles` filter probe + graceful degradation; CI's libass-enabled FFmpeg still burns subtitles
+- [x] **Bug fixed (E2E):** output pixel format was `yuvj420p` (full-range) — verification gate expects `yuv420p`; forced `-color_range tv -colorspace bt709` metadata
+- [x] **Bug fixed (E2E):** `PublishResult` lacked `attempts` — Phase 8 history recording crashed on dry-run; added field (default 1)
+- [x] **Bug fixed (E2E):** AAC sample rate was 24kHz (narration's native rate) — verification gate expects 44.1/48kHz; render now enforces `-ar 48000`
+- [x] Tests: `test_ffmpeg.py` +1 (subtitle-skip degradation path) — 323 total
 - [x] All 9 pipeline modules importable: config, ai/story_generator, ai/tts_provider, assets/selector, video/subtitles, video/ffmpeg, video/media_service, facebook/reels, history/store, audio/validator, utils/retry
 - [x] Dependabot config created (`.github/dependabot.yml`) — daily pip + GitHub Actions dependency checks
 - [x] Go-live checklist documented in README.md: commit, secrets, CI verify, first run, cron setup, monitoring
 - [x] Safe diagnostics + secret scan documented in README.md Development section
-- [x] AGENTS.md reviewed — all rules current and accurate (12 mandatory rules + verification/testing/violation sections)
 - [x] Definition of Done updated in PLAN.md
 
 ---

@@ -84,7 +84,7 @@ jobs:
     steps:
       # 1. Checkout (fetch LFS media so the runner has real background/ambient files)
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -155,7 +155,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Commit run history
         run: |

@@ -82,9 +82,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
+      # 1. Checkout (fetch LFS media so the runner has real background/ambient files)
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       # 2. Setup Python
       - name: Setup Python

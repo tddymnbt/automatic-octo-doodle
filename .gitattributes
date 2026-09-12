@@ -1,0 +1,2 @@
+assets/backgrounds/gospel/*.webp filter=lfs diff=lfs merge=lfs -text
+assets/ambient/*.wav filter=lfs diff=lfs merge=lfs -text

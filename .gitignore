@@ -32,6 +32,7 @@ artifacts/
 *.aac
 *.srt
 *.ass
+!assets/ambient/
 
 # ================================
 # LOCAL STATE

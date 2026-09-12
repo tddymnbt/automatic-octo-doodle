@@ -404,8 +404,8 @@ class VideoRenderer:
             "-c:a", self.audio_codec,
             "-ar", "48000",
             "-b:a", "128k",
-            "-preset", "veryfast",
-            "-crf", "28",
+            "-preset", "ultrafast",
+            "-crf", "30",
             "-shortest",
             str(out),
         ]

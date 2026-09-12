@@ -244,7 +244,11 @@ def main() -> int:
         ambient_asset = None
         from src.assets.selector import AssetSelector
 
-        selector = AssetSelector(assets_dir=settings.background_dir, ambient_dir=settings.ambient_dir)
+        selector = AssetSelector(
+            assets_dir=settings.background_dir,
+            ambient_dir=settings.ambient_dir,
+            random_ambient=settings.random_ambient,
+        )
         if settings.enable_background:
             background_asset = selector.select_background(prefer_gospel=True)
         if settings.enable_ambient_audio:
@@ -375,6 +379,11 @@ def main() -> int:
     print(f"[8/{TOTAL_PHASES}] Posting comments...")
     if not post_id:
         print("  - DRY RUN: skipped comment posting")
+        return 0
+
+    # Skip comment posting if POST_COMMENTS is false (requires pages_manage_engagement)
+    if not settings.post_comments:
+        print("  - POST_COMMENTS=false: skipped comment posting")
         return 0
 
     try:

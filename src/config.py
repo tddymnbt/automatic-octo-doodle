@@ -98,6 +98,28 @@ class Settings:
     # Publishing slot identity (1-5) set by the CI workflow from the dispatch
     # input. Pure observability label at launch — does not gate behavior.
     slot: str = field(default_factory=lambda: _get_env("SLOT", "1"))
+    # Whether to post first comment + pinned comment (requires pages_manage_engagement).
+    # Disabled by default; enable when the Page token has the required permissions.
+    post_comments: bool = field(default_factory=lambda: _get_bool("POST_COMMENTS", False))
+    # Voice cycling: odd slots (1,3,5) use am_fenrir; even (2,4) use am_onyx.
+    # This property computes the effective voice for the current slot.
+    # Can be overridden by explicit KOKORO_VOICE env var.
+    _kokoro_voice_override: str = field(default_factory=lambda: _get_env("KOKORO_VOICE", ""))
+
+    @property
+    def effective_kokoro_voice(self) -> str:
+        """Return the voice for the current slot, respecting explicit override."""
+        if self._kokoro_voice_override:
+            return self._kokoro_voice_override
+        # Odd slots (1,3,5) -> am_fenrir; even (2,4) -> am_onyx
+        try:
+            slot_num = int(self.slot)
+            return "am_fenrir" if slot_num % 2 == 1 else "am_onyx"
+        except ValueError:
+            return "am_fenrir"
+
+    # Randomize ambient track selection per run for variety.
+    random_ambient: bool = field(default_factory=lambda: _get_bool("RANDOM_AMBIENT", True))
     
     # === CONTENT SETTINGS ===
     story_language: str = field(default_factory=lambda: _get_env("STORY_LANGUAGE", "en"))
@@ -171,7 +193,7 @@ class Settings:
             "ai_model": self.ai_model,
             "tts_model": self.tts_model,
             "tts_provider": self.tts_provider,
-            "kokoro_voice": self.kokoro_voice,
+            "kokoro_voice": self.effective_kokoro_voice,
             "kokoro_speed": self.kokoro_speed,
             "kokoro_lang": self.kokoro_lang,
             "reverb_enabled": self.reverb_enabled,
@@ -187,6 +209,8 @@ class Settings:
             "dry_run": self.dry_run,
             "log_level": self.log_level,
             "slot": self.slot,
+            "post_comments": self.post_comments,
+            "random_ambient": self.random_ambient,
             "story_language": self.story_language,
             "content_style": self.content_style,
             "facebook_graph_version": self.facebook_graph_version,

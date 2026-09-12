@@ -53,10 +53,10 @@ env:
   AI_MODEL: gemini-3.5-flash-lite
   TTS_MODEL: gemini-3.1-flash-tts-preview
   TTS_PROVIDER: kokoro
-  KOKORO_VOICE: am_fenrir
+  # KOKORO_VOICE: computed from slot (odd=am_fenrir, even=am_onyx) or overridden by env
   KOKORO_SPEED: '0.85'
   KOKORO_LANG: a
-  REVERB_ENABLED: 'true'
+  REVERB_ENABLED: 'false'
   REVERB_DELAY: '30'
   REVERB_DECAY: '0.4'
   REVERB_WET: '0.06'
@@ -72,6 +72,7 @@ env:
   FACEBOOK_RETRY_COUNT: '3'
   MAX_VISUALS_PER_VIDEO: '8'
   ENABLE_AMBIENT_AUDIO: 'true'
+  RANDOM_AMBIENT: 'true'
   ENABLE_SUBTITLES: 'true'
   # Git-backed run history lives in data/ (see .gitignore: generated media
   # is ignored, but data/run_history.jsonl is committed for idempotency).

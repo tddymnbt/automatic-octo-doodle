@@ -36,29 +36,33 @@ class AssetSelector:
     """
     
     def __init__(
-        self,
-        assets_dir: Path | str | None = None,
-        max_assets_per_category: int = 10,
-        ambient_dir: Path | str | None = None,
-        random_background: bool = True,
-    ) -> None:
-        """Initialize the asset selector.
+            self,
+            assets_dir: Path | str | None = None,
+            max_assets_per_category: int = 10,
+            ambient_dir: Path | str | None = None,
+            random_background: bool = True,
+            random_ambient: bool = True,
+        ) -> None:
+            """Initialize the asset selector.
+       
+            Args:
+                assets_dir: Path to assets directory (default: from settings)
+                max_assets_per_category: Max assets to load per category
+                ambient_dir: Optional path to ambient audio dir (default: derived
+                    as <assets_dir>/../ambient, or from settings)
+                random_background: If True, pick a random background each run for
+                    variety; if False, pick the first (deterministic).
+                random_ambient: If True, pick a random ambient track each run for
+                    variety; if False, pick the first (deterministic).
+            """
+            self._assets_dir = Path(assets_dir) if assets_dir else settings.assets_dir
+            self._max_per_category = max_assets_per_category
+            self._ambient_dir_override = Path(ambient_dir) if ambient_dir else None
+            self._random_background = random_background
+            self._random_ambient = random_ambient
+            self._cache: dict[AssetCategory, list[Asset]] = {}
         
-        Args:
-            assets_dir: Path to assets directory (default: from settings)
-            max_assets_per_category: Max assets to load per category
-            ambient_dir: Optional path to ambient audio dir (default: derived
-                as <assets_dir>/../ambient, or from settings)
-            random_background: If True, pick a random background each run for
-                variety; if False, pick the first (deterministic).
-        """
-        self._assets_dir = Path(assets_dir) if assets_dir else settings.assets_dir
-        self._max_per_category = max_assets_per_category
-        self._ambient_dir_override = Path(ambient_dir) if ambient_dir else None
-        self._random_background = random_background
-        self._cache: dict[AssetCategory, list[Asset]] = {}
-        
-        logger.info(f"Asset selector initialized: {self._assets_dir}")
+            logger.info(f"Asset selector initialized: {self._assets_dir}")
     
     def scan_assets(self) -> dict[AssetCategory, list[Asset]]:
         """Scan asset directory and categorize all available media.
@@ -311,16 +315,21 @@ class AssetSelector:
         return picked
 
     def select_ambient(self) -> Asset | None:
-        """Pick a single ambient track deterministically (first by name).
+        """Pick a single ambient track.
 
         If no ambient tracks exist, returns None (caller renders narration-only).
+        If random_ambient is True (default), picks randomly for variety.
         """
         tracks = self.list_ambient()
         if not tracks:
             logger.warning("No ambient tracks available; rendering narration-only")
             return None
-        picked = tracks[0]
-        logger.info(f"Selected ambient: {picked}")
+        if self._random_ambient:
+            picked = random.choice(tracks)
+            logger.info(f"Selected ambient (random): {picked}")
+        else:
+            picked = tracks[0]
+            logger.info(f"Selected ambient (first): {picked}")
         return picked
     
     def get_available_categories(self) -> list[AssetCategory]:

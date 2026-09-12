@@ -380,8 +380,8 @@ def create_tts_provider(
             kwargs["voice"] = voice
         try:
             from src.config import settings
-            if settings.kokoro_voice:
-                kwargs.setdefault("voice", settings.kokoro_voice)
+            # Use the effective voice (slot-based cycling or explicit override)
+            kwargs.setdefault("voice", settings.effective_kokoro_voice)
             if settings.kokoro_speed:
                 kwargs["speed"] = settings.kokoro_speed
         except Exception:

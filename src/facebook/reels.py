@@ -58,9 +58,10 @@ REELS_ENDPOINT = "video_reels"
 MAX_CAPTION_LENGTH = 500
 
 # Non-transient error subcodes that must NOT be retried:
-#  190 = invalid/expired OAuth token; 200 = permissions; 368 = abusive;
-#  100 = invalid parameter; 613 = rate limit exceeded.
-NON_RETRYABLE_ERROR_CODES = {100, 190, 200, 368, 613}
+#  100 = invalid parameter; 190 = invalid/expired OAuth token; 200 = permissions;
+#  2500 = Unknown path components (endpoint doesn't exist for this token/node);
+#  368 = abusive; 613 = rate limit exceeded.
+NON_RETRYABLE_ERROR_CODES = {100, 190, 200, 2500, 368, 613}
 
 
 class FacebookPublishError(Exception):
@@ -319,6 +320,37 @@ class ReelsPublisher:
             self.build_caption(story) if story else video.stem[:MAX_CAPTION_LENGTH]
         )
         final_desc = final_desc.strip()[:MAX_CAPTION_LENGTH]
+
+        # Pre-flight: verify token is a Page token for the correct page.
+        # This catches "token is User token" / "wrong page" before we burn
+        # render + upload time. Calls GET /{page_id}?fields=id,name.
+        try:
+            me_resp = self.session.get(
+                f"{self._graph_url()}/{self.page_id}",
+                params={"fields": "id,name", "access_token": self.access_token},
+                timeout=10.0,
+            )
+            if me_resp.status_code == 200:
+                me_data = me_resp.json()
+                if me_data.get("id") != self.page_id:
+                    raise FacebookAuthError(
+                        f"Token resolves to different Page (id={me_data.get('id')}, "
+                        f"name={me_data.get('name')}) than configured page_id={self.page_id}"
+                    )
+            elif me_resp.status_code == 400:
+                err = me_resp.json().get("error", {})
+                if err.get("code") == 2500:
+                    raise FacebookAuthError(
+                        f"Token does not have access to Page {self.page_id} or "
+                        f"the endpoint is not available for this token type. "
+                        f"Ensure META_PAGE_ACCESS_TOKEN is a PAGE access token (not User). "
+                        f"Meta error: {err.get('message')}"
+                    )
+        except FacebookAuthError:
+            raise
+        except requests.RequestException as e:
+            # Network/timeout - don't block, just warn
+            logger.warning(f"Pre-flight token check skipped (network): {e}")
 
         # Step 1: START upload session
         video_id, upload_url = self._start_upload()

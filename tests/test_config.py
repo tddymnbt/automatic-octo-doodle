@@ -31,6 +31,13 @@ class TestSettings:
             assert test_settings.max_duration_seconds == 60
             assert test_settings.dry_run is True
             assert test_settings.log_level == "INFO"
+            assert test_settings.slot == "1"
+    
+    def test_settings_loads_slot_from_env(self):
+        """Settings should read the slot identity from the environment."""
+        with patch.dict(os.environ, {"SLOT": "5"}, clear=True):
+            test_settings = Settings()
+            assert test_settings.slot == "5"
     
     def test_settings_loads_from_env(self):
         """Settings should load from environment variables."""

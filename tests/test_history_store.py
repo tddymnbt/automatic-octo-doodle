@@ -49,6 +49,7 @@ class TestRecordRun:
             status=STATUS_PUBLISHED,
             story_title="The Title",
             dry_run=False,
+            slot="3",
             video_path="output/final.mp4",
             post_id="12345",
             video_id="vid_1",
@@ -67,6 +68,11 @@ class TestRecordRun:
         assert loaded.duration_s == 45.5
         assert loaded.asset_count == 8
         assert loaded.tts_provider == "kokoro"
+        assert loaded.slot == "3"
+
+    def test_record_slot_defaults_empty(self, store: HistoryStore):
+        rec = store.record(story_hash="h", status=STATUS_PUBLISHED)
+        assert rec.slot == ""
 
     def test_no_secrets_in_record(self, store: HistoryStore, tmp_path):
         # The store schema has no secret fields; ensure the dataclass has
@@ -176,6 +182,7 @@ class TestRunRecordDataclass:
             status=STATUS_PUBLISHED,
             story_title="T",
             dry_run=False,
+            slot="2",
             video_path="v",
             post_id="p",
             video_id="vid",
@@ -189,6 +196,7 @@ class TestRunRecordDataclass:
         assert d["run_id"] == "rid"
         assert d["story_hash"] == "hash"
         assert d["post_id"] == "p"
+        assert d["slot"] == "2"
         assert "access_token" not in d
 
     def test_roundtrip(self, store: HistoryStore):

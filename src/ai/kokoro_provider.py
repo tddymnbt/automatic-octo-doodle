@@ -5,7 +5,7 @@ runs locally on CPU. It is the PRIMARY production TTS provider because it:
 
 - Requires no paid API key
 - Runs fully offline on a CPU (GitHub Actions runners included)
-- Produces natural, calm voices suitable for ASMR narration
+- Produces natural, calm voices suitable for reverent Gospel / Daily Bread narration
 - Weights are downloaded from HuggingFace (hexgrad/Kokoro-82M) and reused
 
 The provider is fitted behind the same ``TTSProvider`` Protocol as Gemini, so
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 # Optional imports - Kokoro is only required when this provider is selected.
@@ -44,6 +45,19 @@ logger = logging.getLogger(__name__)
 KOKORO_SAMPLE_RATE = 24000
 
 
+@dataclass
+class SyncedSegment:
+    """A single contiguous speech segment with its exact spoken text and timing.
+
+    ``start``/``end`` are seconds measured against the WAV returned alongside
+    these segments. The ``text`` is exactly what Kokoro spoke in that window.
+    """
+
+    text: str
+    start: float
+    end: float
+
+
 class KokoroTTSUnavailableError(TTSProviderError):
     """Kokoro package or system dependency (espeak-ng) is not installed."""
 
@@ -56,20 +70,21 @@ class KokoroTTSProvider:
     no TTS credential.
     """
 
-    # Default calm, warm female American voice suited to ASMR narration.
-    DEFAULT_VOICE = "af_heart"
+    # Male, deep, warm — chosen for calm Gospel/Bible narration.
+    # am_fenrir is the deepest, highest-quality male voice (B grade).
+    DEFAULT_VOICE = "am_fenrir"
     # Alternative voices (documented for easy configuration):
-    #   af_bella  - female, soft
-    #   af_nicole - female, calming
     #   am_michael - male, calm
+    #   am_adam   - male, soft
+    #   am_santa  - male, deep booming
     DEFAULT_LANG_CODE = "a"  # American English
 
-    # The ASMR narration isn't steered by natural language at runtime (Kokoro
+    # The Gospel narration isn't steered by natural language at runtime (Kokoro
     # picks a fixed voice); this constant documents the target style that the
     # DEFAULT_VOICE was chosen for.
     ASMR_VOICE_INSTRUCTION = (
-        "Calm, intimate, soft nighttime storytelling. Slow, gentle pacing. "
-        "Warm and slightly mysterious. Whispers-style narration for ASMR."
+        "Calm, reverent, authoritative narration. Deep, warm, mature male voice. "
+        "Slow, measured pacing suitable for reading Scripture."
     )
 
     def __init__(
@@ -86,7 +101,7 @@ class KokoroTTSProvider:
         Args:
             voice: Kokoro voice name (default: af_heart)
             lang_code: Kokoro language code (default: 'a' = American English)
-            speed: Speech speed multiplier (default 1.0; slower for ASMR)
+            speed: Speech speed multiplier (default 1.0; slower for Gospel)
             device: Device override ('cpu' or 'cuda'); default None (auto CPU)
             pipeline: Optional pre-built KPipeline (for tests/dependency injection)
             repo_id: Optional HuggingFace repo id for weights
@@ -156,7 +171,7 @@ class KokoroTTSProvider:
             raise TTSProviderError("Text cannot be empty")
 
         # Kokoro drives pacing via fixed voice + speed, not natural language.
-        # A slower speed suits the calm ASMR delivery.
+        # A slower speed suits the calm Gospel delivery.
         speed = self._speed
 
         try:
@@ -194,6 +209,79 @@ class KokoroTTSProvider:
             logger.error(f"Kokoro TTS error: {type(e).__name__}: {e}")
             raise TTSProviderError(
                 f"Kokoro TTS generation failed: {type(e).__name__}"
+            ) from e
+
+    def synthesize_aligned(
+        self,
+        text: str,
+        voice_instruction: str = "",
+    ) -> tuple[bytes, list[SyncedSegment]]:
+        """Generate speech and yield (audio, synced segment timing).
+
+        Kokoro predicts a per-phoneme duration for every token, giving real
+        speech-aligned segment boundaries — the audio is split into segments
+        whose ``text`` is exactly what is spoken in that time window. This is
+        the reliable source for subtitle synchronization (no WPM estimates).
+
+        Returns:
+            (wav_bytes, segments) where each segment has
+            text, start, end (seconds) measured against the returned WAV.
+        """
+        if not text or not text.strip():
+            raise TTSProviderError("Text cannot be empty")
+
+        speed = self._speed
+        try:
+            pipeline = self._get_pipeline()
+            samples: list[tuple[str, np.ndarray]] = []
+            for result in pipeline(
+                text, voice=self._voice, speed=speed, split_pattern=r"[\n.]+\s*"
+            ):
+                audio = result.audio
+                if audio is None or not getattr(result, "graphemes", None):
+                    continue
+                seg = audio.detach().cpu().float().numpy()
+                if seg.size == 0:
+                    continue
+                samples.append((result.graphemes, seg))
+
+            if not samples:
+                raise TTSProviderError("Kokoro produced no audio samples")
+
+            # Concatenate and compute per-segment start/end in seconds.
+            full: list[np.ndarray] = [s for _, s in samples]
+            audio_np = np.concatenate(full)
+            buf = io.BytesIO()
+            sf.write(buf, audio_np, KOKORO_SAMPLE_RATE, format="WAV", subtype="PCM_16")
+
+            segments: list[SyncedSegment] = []
+            cursor = 0.0
+            for graphemes, seg in samples:
+                dur = seg.shape[0] / KOKORO_SAMPLE_RATE
+                segments.append(
+                    SyncedSegment(
+                        text=graphemes,
+                        start=cursor,
+                        end=cursor + dur,
+                    )
+                )
+                cursor += dur
+
+            logger.info(
+                f"Kokoro aligned TTS: {len(audio_np)} samples "
+                f"(~{len(audio_np) / KOKORO_SAMPLE_RATE:.1f}s), "
+                f"{len(segments)} synced segments"
+            )
+            return buf.getvalue(), segments
+
+        except KokoroTTSUnavailableError:
+            raise
+        except TTSProviderError:
+            raise
+        except Exception as e:
+            logger.error(f"Kokoro aligned TTS error: {type(e).__name__}: {e}")
+            raise TTSProviderError(
+                f"Kokoro aligned TTS generation failed: {type(e).__name__}"
             ) from e
 
     def synthesize_to_file(

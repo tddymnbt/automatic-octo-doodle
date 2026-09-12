@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.content.schema import Scene, StoryData
+from src.content.schema import GospelContent
 from src.facebook.reels import (
     MAX_CAPTION_LENGTH,
     FacebookAuthError,
@@ -15,23 +15,34 @@ from src.facebook.reels import (
 )
 
 
-def make_story(**overrides) -> StoryData:
-    """Create a realistic StoryData for test purposes."""
+def make_story(**overrides) -> GospelContent:
+    """Create a realistic GospelContent for test purposes."""
     defaults = {
-        "title": "The Midnight Clockmaker",
-        "hook": "The old clockmaker wound the key one last time...",
-        "narration": (
-            "The old clockmaker wound the key one last time, "
-            "and the silence of midnight seemed to listen."
+        "situation_summary": "feeling overwhelmed by challenges that seem impossible to solve",
+        "hook": "Maybe you're doing everything you can, but nothing seems to be getting better.",
+        "biblical_message": "But Scripture reminds us that we don't have to carry every burden alone.",
+        "scripture_reference": "Matthew 11:28",
+        "scripture_text": "Come to me, all who labor and are heavy laden, and I will give you rest.",
+        "reflection": "When challenges feel impossible, God's peace can surpass our understanding.",
+        "closing_cta": "Can I get an Amen in the comments?",
+        "narration_script": (
+            "Maybe you're doing everything you can, but nothing seems to be getting better. "
+            "But Scripture reminds us that we don't have to carry every burden alone. "
+            "Come to me, all who labor and are heavy laden, and I will give you rest. "
+            "When challenges feel impossible, remember that God offers peace. "
+            "Can I get an Amen in the comments?"
         ),
-        "scenes": [
-            Scene(description="bedroom", duration_seconds=3.0, category="bedroom")
-        ],
-        "caption": "A calm story about midnight clocks and quiet secrets.",
-        "hashtags": ["#ASMR", "#MidnightStory", "#CalmNarration"],
+        "facebook_caption": (
+            "Feeling overwhelmed by challenges that seem impossible?\n\n"
+            "You don't have to carry every burden alone.\n\n📖 Matthew 11:28\n\n"
+            "Can I get an Amen in the comments?"
+        ),
+        "first_comment": "What's weighing on your heart today? Share below 👇",
+        "pinned_comment": "Praying for everyone in the comments. You're not alone.",
+        "hashtags": ["#DailyBread", "#Gospel", "#Faith"],
     }
     defaults.update(overrides)
-    return StoryData(**defaults)
+    return GospelContent.model_construct(**defaults)
 
 
 # ------------------------------------------------------------------
@@ -66,30 +77,30 @@ class TestBuildCaption:
     def test_uses_caption_when_present(self):
         pub = ReelsPublisher.__new__(ReelsPublisher)
         pub.access_token = "tok"
-        story = make_story(caption="A beautiful story.", hashtags=["#a", "#b"])
+        story = make_story(facebook_caption="A beautiful Gospel message.", hashtags=["#a", "#b"])
         cap = pub.build_caption(story)
-        assert "A beautiful story." in cap
+        assert "A beautiful Gospel message." in cap
         assert "#a" in cap and "#b" in cap
 
-    def test_falls_back_to_title_when_no_caption(self):
+    def test_falls_back_to_hook_when_no_caption(self):
         pub = ReelsPublisher.__new__(ReelsPublisher)
         pub.access_token = "tok"
-        story = make_story(caption="", title="My Story", hashtags=[])
+        story = make_story(facebook_caption="", hook="God's peace for your heart.", hashtags=[])
         cap = pub.build_caption(story)
-        assert "My Story" in cap
+        assert "God's peace for your heart." in cap
 
     def test_caption_is_capped(self):
         pub = ReelsPublisher.__new__(ReelsPublisher)
         pub.access_token = "tok"
-        # MAX_CAPTION_LENGTH == 500 (same as schema), so test with exactly 500
-        story = make_story(caption="x" * MAX_CAPTION_LENGTH, hashtags=[])
+        # MAX_CAPTION_LENGTH == 500, so test with exactly 500
+        story = make_story(facebook_caption="x" * MAX_CAPTION_LENGTH, hashtags=[])
         cap = pub.build_caption(story)
         assert len(cap) <= MAX_CAPTION_LENGTH
         assert cap == "x" * MAX_CAPTION_LENGTH  # no truncation when at limit
 
         # Test that when combined with hashtags it still respects limit
         # (cap gets truncated if over MAX_CAPTION_LENGTH after adding hashtags)
-        story = make_story(caption="x" * (MAX_CAPTION_LENGTH - 50), hashtags=["#" + "y" * 60])
+        story = make_story(facebook_caption="x" * (MAX_CAPTION_LENGTH - 50), hashtags=["#" + "y" * 60])
         cap = pub.build_caption(story)
         assert len(cap) <= MAX_CAPTION_LENGTH
         assert cap.endswith("...")
@@ -97,9 +108,9 @@ class TestBuildCaption:
     def test_hashtags_newline_separated(self):
         pub = ReelsPublisher.__new__(ReelsPublisher)
         pub.access_token = "tok"
-        story = make_story(caption="A story.", hashtags=["#x", "#y"])
+        story = make_story(facebook_caption="A Gospel message.", hashtags=["#x", "#y"])
         cap = pub.build_caption(story)
-        assert cap.startswith("A story.")
+        assert cap.startswith("A Gospel message.")
         assert "#x #y" in cap
 
 

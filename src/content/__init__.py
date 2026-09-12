@@ -1,7 +1,7 @@
-"""Content module for story generation and validation."""
+"""Content module for Gospel content generation and validation."""
 
-from src.content.prompts import StoryPrompts
-from src.content.schema import Scene, StoryData
-from src.content.validator import StoryValidator
+from src.content.prompts import GospelPrompts
+from src.content.schema import ContentHistoryEntry, GospelContent
+from src.content.validator import GospelValidator
 
-__all__ = ["Scene", "StoryData", "StoryPrompts", "StoryValidator"]
+__all__ = ["ContentHistoryEntry", "GospelContent", "GospelPrompts", "GospelValidator"]

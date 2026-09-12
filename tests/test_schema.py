@@ -1,249 +1,107 @@
-"""Tests for content schema models."""
+"""Tests for Gospel content schema models."""
 
 import pytest
 from pydantic import ValidationError
 
-from src.content.schema import Scene, StoryData
+from src.content.schema import ContentHistoryEntry, GospelContent
 
 
-class TestScene:
-    """Test Scene model."""
-    
-    def test_valid_scene(self):
-        """Valid scene should create successfully."""
-        scene = Scene(
-            description="rainy bedroom at night",
-            duration_seconds=7.0,
-            category="bedroom",
-        )
-        assert scene.description == "rainy bedroom at night"
-        assert scene.duration_seconds == 7.0
-        assert scene.category == "bedroom"
-    
-    def test_scene_normalizes_category(self):
-        """Category should be normalized to lowercase."""
-        scene = Scene(
-            description="dark forest",
-            duration_seconds=5.0,
-            category="Forest",
-        )
-        assert scene.category == "forest"
-    
-    def test_scene_empty_category(self):
-        """Empty category should be allowed."""
-        scene = Scene(
-            description="mysterious room",
-            duration_seconds=5.0,
-            category="",
-        )
-        assert scene.category == ""
-    
-    def test_scene_short_description_fails(self):
-        """Short description should fail validation."""
-        with pytest.raises(ValidationError):
-            Scene(
-                description="hi",
-                duration_seconds=5.0,
-            )
-    
-    def test_scene_long_description_fails(self):
-        """Long description should fail validation."""
-        with pytest.raises(ValidationError):
-            Scene(
-                description="x" * 201,
-                duration_seconds=5.0,
-            )
-    
-    def test_scene_zero_duration_fails(self):
-        """Zero duration should fail validation."""
-        with pytest.raises(ValidationError):
-            Scene(
-                description="valid description",
-                duration_seconds=0,
-            )
-    
-    def test_scene_negative_duration_fails(self):
-        """Negative duration should fail validation."""
-        with pytest.raises(ValidationError):
-            Scene(
-                description="valid description",
-                duration_seconds=-5.0,
-            )
-    
-    def test_scene_long_duration_warning(self):
-        """Long duration should still be allowed."""
-        scene = Scene(
-            description="long scene description",
-            duration_seconds=30.0,
-        )
-        assert scene.duration_seconds == 30.0
+def _make_content(**overrides) -> GospelContent:  # type: ignore[no-untyped-def]
+    """Helper: build GospelContent with fields meeting all min_length constraints."""
+    defaults = dict(
+        situation_summary="overwhelmed by financial pressure and uncertainty",
+        hook="Maybe you're doing everything you can, but nothing seems to be getting better.",
+        biblical_message="But Scripture reminds us that we don't have to carry every burden alone. God invites us to cast our cares on Him.",
+        scripture_reference="Matthew 11:28",
+        scripture_text="Come to me, all who labor and are heavy laden, and I will give you rest.",
+        reflection="When finances feel impossible, remember that God sees your struggle and offers peace that surpasses understanding.",
+        closing_cta="Can I get an Amen in the comments below?",
+        narration_script="Maybe you're doing everything you can, but nothing seems to be getting better. But Scripture reminds us that we don't have to carry every burden alone. God invites us to cast our cares on Him. Come to me, all who labor and are heavy laden, and I will give you rest. When finances feel impossible, remember that God sees your struggle and offers peace that surpasses understanding. Can I get an Amen in the comments?",
+        facebook_caption="Maybe you're doing everything you can, but nothing seems to be getting better.\n\nBut Scripture reminds us that we don't have to carry every burden alone.\n\n📖 Matthew 11:28\n\nWhen finances feel impossible, remember that God sees your struggle and offers peace.\n\nCan I get an Amen?",
+        first_comment="What's weighing on your heart today? Share below.",
+        pinned_comment="Praying for everyone in the comments. You're not alone in this.",
+        hashtags=["#DailyBread", "#Gospel", "#Faith", "#Encouragement", "#BibleVerse"],
+    )
+    defaults.update(overrides)
+    return GospelContent(**defaults)
 
 
-class TestStoryData:
-    """Test StoryData model."""
-    
-    def test_valid_story(self):
-        """Valid story should create successfully."""
-        story = StoryData(
-            title="The Mystery Room",
-            hook="Every night, she heard a sound from behind the wall.",
-            narration="Every night, Mara heard a sound from behind the wall. It was soft, like whispering. She never could understand what it said.",
-            scenes=[
-                Scene(description="bedroom at night", duration_seconds=10.0, category="bedroom"),
-                Scene(description="mysterious door", duration_seconds=10.0, category="hallway"),
-            ],
-        )
-        assert story.title == "The Mystery Room"
-        assert len(story.scenes) == 2
-    
-    def test_story_default_hashtags(self):
-        """Default hashtags should be provided."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence here.",
-            narration="Test narration text that is long enough to pass validation rules.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0)],
-        )
-        assert "#ASMR" in story.hashtags
-        assert "#ShortStory" in story.hashtags
-    
-    def test_story_hashtag_prefix_auto_added(self):
+class TestGospelContent:
+    """Test GospelContent model."""
+
+    def test_valid_content(self):
+        """Valid content should create successfully."""
+        content = _make_content()
+        assert content.situation_summary == "overwhelmed by financial pressure and uncertainty"
+        assert content.scripture_reference == "Matthew 11:28"
+        assert len(content.hashtags) >= 5
+
+    def test_hashtag_prefix_auto_added(self):
         """Hashtags without # should get prefix added."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence here.",
-            narration="Test narration text that is long enough to pass validation rules.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0)],
-            hashtags=["Mystery", "ASMR"],
-        )
-        assert story.hashtags[0] == "#Mystery"
-        assert story.hashtags[1] == "#ASMR"
-    
-    def test_story_narration_whitespace_cleaned(self):
+        content = _make_content(hashtags=["DailyBread", "Gospel", "Faith"])
+        assert content.hashtags[0] == "#DailyBread"
+        assert content.hashtags[1] == "#Gospel"
+        assert content.hashtags[2] == "#Faith"
+
+    def test_narration_script_whitespace_cleaned(self):
         """Excessive whitespace in narration should be cleaned."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence here.",
-            narration="This  has   too    many     spaces   between   words.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0)],
+        content = _make_content(
+            narration_script="This  has   too    many     spaces   between   words.  " * 5,
         )
-        assert "  " not in story.narration
-    
-    def test_story_short_title_fails(self):
-        """Short title should fail validation."""
+        assert "  " not in content.narration_script
+
+    def test_situation_summary_too_short_fails(self):
+        """Short situation_summary should fail validation."""
         with pytest.raises(ValidationError):
-            StoryData(
-                title="Hi",
-                hook="Test hook sentence here.",
-                narration="Test narration.",
-                scenes=[Scene(description="test scene", duration_seconds=5.0)],
-            )
-    
-    def test_story_long_title_fails(self):
-        """Long title should fail validation."""
-        with pytest.raises(ValidationError):
-            StoryData(
-                title="x" * 101,
-                hook="Test hook sentence here.",
-                narration="Test narration.",
-                scenes=[Scene(description="test scene", duration_seconds=5.0)],
-            )
-    
-    def test_story_short_hook_fails(self):
+            _make_content(situation_summary="short")
+
+    def test_hook_too_short_fails(self):
         """Short hook should fail validation."""
         with pytest.raises(ValidationError):
-            StoryData(
-                title="Valid Title Here",
-                hook="Short",
-                narration="Test narration.",
-                scenes=[Scene(description="test scene", duration_seconds=5.0)],
-            )
-    
-    def test_story_short_narration_fails(self):
-        """Short narration should fail validation."""
+            _make_content(hook="Short")
+
+    def test_narration_script_too_short_fails(self):
+        """Short narration_script should fail validation."""
         with pytest.raises(ValidationError):
-            StoryData(
-                title="Valid Title Here",
-                hook="Valid hook sentence here.",
-                narration="Too short",
-                scenes=[Scene(description="test scene", duration_seconds=5.0)],
-            )
-    
-    def test_story_no_scenes_fails(self):
-        """Story with no scenes should fail validation."""
+            _make_content(narration_script="Too short")
+
+    def test_scripture_reference_format_fails(self):
+        """Invalid scripture reference format should fail."""
         with pytest.raises(ValidationError):
-            StoryData(
-                title="Valid Title Here",
-                hook="Valid hook sentence here.",
-                narration="Valid narration text that is long enough.",
-                scenes=[],
-            )
-    
+            _make_content(scripture_reference="Invalid Reference")
+
+    def test_first_comment_equals_pinned_comment_fails(self):
+        """first_comment and pinned_comment must be different."""
+        with pytest.raises(ValidationError):
+            _make_content(first_comment="Same comment here please", pinned_comment="Same comment here please")
+
     def test_estimate_duration(self):
         """Duration estimation should work correctly."""
-        # 150 words = 60 seconds at 150 WPM
-        narration = " ".join(["word"] * 150)
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence.",
-            narration=narration,
-            scenes=[Scene(description="test scene", duration_seconds=5.0)],
-        )
-        assert story.estimate_duration_seconds() == 60.0
-    
-    def test_scene_categories(self):
-        """Scene categories should be extracted correctly."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence.",
-            narration="Test narration text that is long enough to pass validation.",
-            scenes=[
-                Scene(description="scene 1", duration_seconds=5.0, category="bedroom"),
-                Scene(description="scene 2", duration_seconds=5.0, category="forest"),
-                Scene(description="scene 3", duration_seconds=5.0, category="bedroom"),
-            ],
-        )
-        categories = story.scene_categories()
-        assert "bedroom" in categories
-        assert "forest" in categories
-        assert len(categories) == 2  # Unique categories only
+        # ~130 words = 60 seconds at 130 WPM
+        narration = " ".join(["word"] * 130)
+        content = _make_content(narration_script=narration)
+        assert content.estimate_duration_seconds() == 60.0
+
+    def test_serialization(self):
+        """Content should serialize to dict correctly."""
+        content = _make_content(hashtags=["#DailyBread", "#Gospel"])
+        data = content.model_dump()
+        assert data["situation_summary"] == "overwhelmed by financial pressure and uncertainty"
+        assert data["scripture_reference"] == "Matthew 11:28"
+        assert len(data["hashtags"]) == 2
 
 
-class TestStoryDataEdgeCases:
-    """Test edge cases for StoryData."""
-    
-    def test_story_with_empty_caption(self):
-        """Empty caption should be allowed."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence here.",
-            narration="Test narration text that is long enough to pass validation rules.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0)],
-            caption="",
+class TestContentHistoryEntry:
+    """Test ContentHistoryEntry model."""
+
+    def test_from_gospel_content(self):
+        """Should create history entry from GospelContent."""
+        content = _make_content()
+        entry = ContentHistoryEntry.from_gospel_content(
+            content, "abc123", "2026-01-01T00:00:00Z"
         )
-        assert story.caption == ""
-    
-    def test_story_serialization(self):
-        """Story should serialize to dict correctly."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence here.",
-            narration="Test narration text that is long enough to pass validation rules.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0, category="bedroom")],
-            hashtags=["#ASMR"],
-        )
-        data = story.model_dump()
-        assert data["title"] == "Test Title"
-        assert len(data["scenes"]) == 1
-        assert data["scenes"][0]["category"] == "bedroom"
-    
-    def test_story_from_dict(self):
-        """Story should deserialize from dict correctly."""
-        data = {
-            "title": "Test Title",
-            "hook": "Test hook sentence here.",
-            "narration": "Test narration text that is long enough to pass validation rules.",
-            "scenes": [{"description": "test scene", "duration_seconds": 5.0}],
-        }
-        story = StoryData(**data)
-        assert story.title == "Test Title"
+        assert entry.content_hash == "abc123"
+        assert entry.situation_summary == content.situation_summary
+        assert entry.scripture_reference == content.scripture_reference
+        assert entry.title == content.hook[:100]
+        assert entry.timestamp == "2026-01-01T00:00:00Z"

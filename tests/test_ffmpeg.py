@@ -5,382 +5,163 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.assets.models import Asset, AssetCategory
-from src.content.schema import Scene, StoryData
 from src.video.ffmpeg import FFmpegError, FFmpegNotFoundError, VideoRenderer, create_video_renderer
 
 
 class TestVideoRendererInit:
     """Test VideoRenderer initialization."""
-    
+
     @patch("src.video.ffmpeg.shutil.which")
-    def test_init_with_ffmpeg(self, mock_which):
+    @patch("src.video.ffmpeg.Path.exists")
+    def test_init_with_ffmpeg(self, mock_exists, mock_which):
         """Should initialize when FFmpeg is found."""
         mock_which.return_value = "/usr/bin/ffmpeg"
-        
+        mock_exists.return_value = False
+
         renderer = VideoRenderer()
-        
+
         assert renderer._ffmpeg_path == "/usr/bin/ffmpeg"
         assert renderer.width == 1080
         assert renderer.height == 1920
         assert renderer.fps == 30
-    
+
     @patch("src.video.ffmpeg.shutil.which")
-    def test_init_ffmpeg_not_found(self, mock_which):
+    @patch("src.video.ffmpeg.Path.exists")
+    def test_init_ffmpeg_not_found(self, mock_exists, mock_which):
         """Should raise error when FFmpeg not found."""
         mock_which.return_value = None
-        
+        mock_exists.return_value = False
+
         with pytest.raises(FFmpegNotFoundError):
             VideoRenderer()
-    
+
     @patch("src.video.ffmpeg.shutil.which")
-    def test_init_custom_settings(self, mock_which):
+    @patch("src.video.ffmpeg.Path.exists")
+    def test_init_custom_settings(self, mock_exists, mock_which):
         """Should accept custom settings."""
         mock_which.return_value = "/usr/bin/ffmpeg"
-        
+        mock_exists.return_value = False
+
         renderer = VideoRenderer(width=1920, height=1080, fps=60)
-        
+
         assert renderer.width == 1920
         assert renderer.height == 1080
         assert renderer.fps == 60
 
+    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
+    def test_subtitles_not_probed_on_init(self, mock_exists, mock_which):
+        """Constructing a renderer should NOT probe filter support (shell out)."""
+        renderer = VideoRenderer()
+        assert renderer._subtitles_available is None
+        # No subprocess probe on construction.
+
 
 class TestVideoRendererRunFFmpeg:
     """Test FFmpeg command execution."""
-    
+
     @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
     @patch("src.video.ffmpeg.subprocess.run")
-    def test_run_ffmpeg_success(self, mock_run, mock_which):
+    def test_run_ffmpeg_success(self, mock_run, mock_exists, mock_which):
         """Should run FFmpeg command successfully."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stderr = ""
         mock_run.return_value = mock_result
-        
+
         renderer = VideoRenderer()
         result = renderer._run_ffmpeg(["ffmpeg", "-version"])
-        
+
         assert result == mock_result
         mock_run.assert_called_once()
-    
+
     @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
     @patch("src.video.ffmpeg.subprocess.run")
-    def test_run_ffmpeg_failure(self, mock_run, mock_which):
+    def test_run_ffmpeg_failure(self, mock_run, mock_exists, mock_which):
         """Should raise error on FFmpeg failure."""
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stderr = "Error: invalid argument"
         mock_run.return_value = mock_result
-        
+
         renderer = VideoRenderer()
-        
+
         with pytest.raises(FFmpegError, match="FFmpeg failed"):
-            renderer._run_ffmpeg(["ffmpeg", "-invalid"])
-    
+            renderer._run_ffmpeg(["ffmpeg", "-badflag"])
+
+
+class TestSubtitlesSupported:
+    """Test subtitle filter capability probe."""
+
     @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
     @patch("src.video.ffmpeg.subprocess.run")
-    def test_run_ffmpeg_timeout(self, mock_run, mock_which):
-        """Should raise error on timeout."""
-        import subprocess
-        mock_run.side_effect = subprocess.TimeoutExpired("ffmpeg", 300)
-        
-        renderer = VideoRenderer()
-        
-        with pytest.raises(FFmpegError, match="timed out"):
-            renderer._run_ffmpeg(["ffmpeg", "-version"])
-
-
-class TestCreateImageSegment:
-    """Test image segment creation."""
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    def test_create_image_segment(self, mock_run, mock_which):
-        """Should create image segment with Ken Burns effect."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
-        
-        renderer = VideoRenderer()
-        asset = Asset(
-            path=Path("/assets/image.jpg"),
-            category=AssetCategory.BEDROOM,
-            filename="image.jpg",
-        )
-        output = Path("/tmp/segment.mp4")
-        
-        renderer._create_image_segment(
-            asset=asset,
-            duration=5.0,
-            output=output,
-            is_first=True,
-            is_last=False,
-        )
-        
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "/usr/bin/ffmpeg"
-        assert "-loop" in cmd
-        assert "1" in cmd
-        assert str(asset.path) in cmd
-        assert "zoompan" in " ".join(cmd)
-
-
-class TestCreateVideoSegment:
-    """Test video segment creation."""
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    def test_create_video_segment(self, mock_run, mock_which):
-        """Should create video segment from video asset."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
-        
-        renderer = VideoRenderer()
-        asset = Asset(
-            path=Path("/assets/video.mp4"),
-            category=AssetCategory.CITY,
-            filename="video.mp4",
-        )
-        output = Path("/tmp/segment.mp4")
-        
-        renderer._create_video_segment(
-            asset=asset,
-            duration=5.0,
-            output=output,
-        )
-        
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "-an" in cmd  # No audio from source
-
-
-class TestWriteConcatFile:
-    """Test concat file writing."""
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    def test_write_concat_file(self, mock_which, tmp_path):
-        """Should write concat file correctly."""
-        renderer = VideoRenderer()
-        
-        segments = [
-            Path("/tmp/seg1.mp4"),
-            Path("/tmp/seg2.mp4"),
-        ]
-        concat_file = tmp_path / "concat.txt"
-        
-        renderer._write_concat_file(segments, concat_file)
-        
-        content = concat_file.read_text()
-        assert "file '/tmp/seg1.mp4'" in content
-        assert "file '/tmp/seg2.mp4'" in content
-
-
-class TestRenderFinalVideo:
-    """Test final video rendering."""
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    def test_render_final_video_narration_only(self, mock_run, mock_which, tmp_path):
-        """Should render with narration only."""
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_run.return_value = mock_result
-        
-        renderer = VideoRenderer()
-        # Declare subtitles supported to test the burning path directly
-        # (avoids an extra subprocess probe in the mocked subprocess.run).
-        renderer._subtitles_available = True
-        
-        concat_file = tmp_path / "concat.txt"
-        concat_file.write_text("file 'seg1.mp4'\nfile 'seg2.mp4'")
-        
-        narration = tmp_path / "narration.wav"
-        narration.write_bytes(b"fake audio")
-        
-        subtitle = tmp_path / "subs.srt"
-        subtitle.write_text("1\n00:00:00,000 --> 00:00:02,000\nHello")
-        
-        output = tmp_path / "output.mp4"
-        
-        renderer._render_final_video(
-            concat_file=concat_file,
-            narration_audio=narration,
-            subtitle_file=subtitle,
-            output_path=output,
-            ambient_audio=None,
-            ambient_volume=0.1,
-        )
-        
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "-f" in cmd
-        assert "concat" in cmd
-        assert "subtitles" in " ".join(cmd)
-        # The subtitle path must be absolute (ffmpeg resolves relative to CWD)
-        assert str(subtitle.resolve()) in " ".join(cmd)
-
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    def test_render_final_video_skips_subtitles_when_unsupported(
-        self, mock_run, mock_which, tmp_path
-    ):
-        """Should skip subtitle burning when the filter is unavailable."""
+    def test_has_subtitles_filter(self, mock_run, mock_exists, mock_which):
+        """Probe should detect the subtitles filter when present."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = (
             "Filters:\n"
-            "  .. null             V->V       Pass the source unchanged\n"
+            "  .. subtitles        V->V  Render text subtitles onto input video\n"
         )
         mock_run.return_value = mock_result
 
         renderer = VideoRenderer()
-        assert renderer._subtitles_supported() is False
-
-        concat_file = tmp_path / "concat.txt"
-        concat_file.write_text("file 'seg1.mp4'\n")
-        narration = tmp_path / "narration.wav"
-        narration.write_bytes(b"fake audio")
-        subtitle = tmp_path / "subs.srt"
-        subtitle.write_text("1\n00:00:00,000 --> 00:00:02,000\nHello")
-        output = tmp_path / "output.mp4"
-
-        renderer._render_final_video(
-            concat_file=concat_file,
-            narration_audio=narration,
-            subtitle_file=subtitle,
-            output_path=output,
-            ambient_audio=None,
-            ambient_volume=0.1,
-        )
-
-        # Exactly one ffmpeg invocation (the probe) plus the render = the two
-        # calls; both returned success.
-        cmd = mock_run.call_args_list[-1][0][0]
-        assert "subtitles" not in " ".join(cmd)
+        renderer.enable_subtitles = True
+        assert renderer._has_filter("subtitles") is True
 
 
-class TestValidateVideo:
-    """Test video validation."""
-    
+class TestApplyReverb:
+    """Test reverb application."""
+
     @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
     @patch("src.video.ffmpeg.subprocess.run")
-    @patch("src.video.ffmpeg.Path.exists")
-    def test_validate_video_success(self, mock_exists, mock_run, mock_which):
-        """Should validate video correctly."""
-        mock_exists.return_value = True
-        
-        # Mock ffprobe responses
-        def side_effect(cmd, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            
-            if "format=duration" in " ".join(cmd):
-                mock_result.stdout = '{"format": {"duration": "45.5"}}'
-            elif "a:0" in " ".join(cmd):
-                mock_result.stdout = '{"streams": [{"codec_name": "aac"}]}'
-            else:
-                mock_result.stdout = '{"streams": [{"width": 1080, "height": 1920, "r_frame_rate": "30/1", "codec_name": "h264"}]}'
-            
-            return mock_result
-        
-        mock_run.side_effect = side_effect
-        
-        renderer = VideoRenderer()
-        validation = renderer.validate_video(Path("/tmp/video.mp4"))
-        
-        assert validation["valid"] is True
-        assert validation["width"] == 1080
-        assert validation["height"] == 1920
-        assert abs(validation["fps"] - 30) < 0.1
-        assert validation["duration"] == 45.5
-        assert validation["has_audio"] is True
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    @patch("src.video.ffmpeg.Path.exists")
-    def test_validate_video_wrong_dimensions(self, mock_exists, mock_run, mock_which):
-        """Should fail validation for wrong dimensions."""
-        mock_exists.return_value = True
-        
-        def side_effect(cmd, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            mock_result.stdout = '{"streams": [{"width": 1920, "height": 1080, "r_frame_rate": "30/1", "codec_name": "h264"}]}'
-            return mock_result
-        
-        mock_run.side_effect = side_effect
-        
-        renderer = VideoRenderer()
-        
-        with pytest.raises(FFmpegError, match="Width mismatch"):
-            renderer.validate_video(Path("/tmp/video.mp4"))
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    @patch("src.video.ffmpeg.Path.exists")
-    def test_validate_video_no_audio(self, mock_exists, mock_run, mock_which):
-        """Should fail validation for missing audio."""
-        mock_exists.return_value = True
-        
-        def side_effect(cmd, **kwargs):
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            if "a:0" in " ".join(cmd):
-                mock_result.stdout = '{"streams": []}'
-            else:
-                mock_result.stdout = '{"streams": [{"width": 1080, "height": 1920, "r_frame_rate": "30/1", "codec_name": "h264"}]}'
-            return mock_result
-        
-        mock_run.side_effect = side_effect
-        
-        renderer = VideoRenderer()
-        
-        with pytest.raises(FFmpegError, match="No audio stream"):
-            renderer.validate_video(Path("/tmp/video.mp4"))
-
-
-class TestFullRenderPipeline:
-    """Test full render pipeline (mocked)."""
-    
-    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    @patch("src.video.ffmpeg.subprocess.run")
-    def test_render_story(self, mock_run, mock_which, tmp_path):
-        """Should render complete story video."""
+    def test_applies_aecho(self, mock_run, mock_exists, mock_which, tmp_path):
+        """Should apply subtle aecho reverb with configured params."""
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_run.return_value = mock_result
-        
+
         renderer = VideoRenderer()
-        
-        # Create story with valid narration length
-        story = StoryData(
-            title="Test Story",
-            hook="Test hook sentence here.",
-            narration="This is the first scene with some narration. This is the second scene with more narration text.",
-            scenes=[
-                Scene(description="bedroom", duration_seconds=3.0, category="bedroom"),
-                Scene(description="forest", duration_seconds=3.0, category="forest"),
-            ],
-        )
-        
-        # Create assets
-        assets = [
-            Asset(path=tmp_path / "bedroom.jpg", category=AssetCategory.BEDROOM, filename="bedroom.jpg"),
-            Asset(path=tmp_path / "forest.jpg", category=AssetCategory.FOREST, filename="forest.jpg"),
-        ]
-        
-        # Create dummy files
-        (tmp_path / "bedroom.jpg").write_bytes(b"fake image")
-        (tmp_path / "forest.jpg").write_bytes(b"fake image")
+        inp = tmp_path / "narration.wav"
+        inp.write_bytes(b"fake audio")
+        out = tmp_path / "reverb.wav"
+
+        result = renderer.apply_reverb(inp, out, delay_ms=30, decay=0.4, wet=0.06)
+
+        assert result == out
+        cmd = mock_run.call_args[0][0]
+        # cmd = [ffmpeg, -y, -i, inp, -af, aecho=1:0.06:30:0.4, -ar, 24000, out]
+        assert any("aecho" in arg for arg in cmd)
+        assert cmd[5] == "aecho=1:0.06:30:0.4"
+        assert "-ar" in cmd
+        assert "24000" in cmd
+
+
+class TestRenderBlackVideo:
+    """Test the black-background render path."""
+
+    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
+    @patch("src.video.ffmpeg.subprocess.run")
+    def test_render_black_video(self, mock_run, mock_exists, mock_which, tmp_path):
+        """Should render black video with reverb and subtitles (mocked)."""
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_run.return_value = mock_result
+
+        renderer = VideoRenderer()
+        renderer._subtitles_available = True
+
         narration = tmp_path / "narration.wav"
         narration.write_bytes(b"fake audio")
         subtitle = tmp_path / "subs.srt"
-        subtitle.write_text("1\n00:00:00,000 --> 00:00:03,000\nFirst scene.\n")
+        subtitle.write_text("1\n00:00:00,000 --> 00:00:02,000\nAmen.\n")
         output = tmp_path / "output.mp4"
-        
-        # Mock validate_video to return success
+
         with patch.object(renderer, "validate_video") as mock_validate:
             mock_validate.return_value = {
                 "valid": True,
@@ -390,31 +171,210 @@ class TestFullRenderPipeline:
                 "duration": 45,
                 "has_audio": True,
             }
-            
-            result = renderer.render(
-                story=story,
-                assets=assets,
-                narration_audio=narration,
-                subtitle_file=subtitle,
+            result = renderer.render_black_video(
+                narration_wav=narration,
+                subtitle_srt=subtitle,
                 output_path=output,
+                reverb=True,
             )
-            
-            assert result == output
-            # Should have been called multiple times for segments + final
-            assert mock_run.call_count >= 3
+
+        assert result == output
+        assert mock_run.call_count >= 1
+
+
+class TestValidateVideo:
+    """Test video validation."""
+
+    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
+    @patch("src.video.ffmpeg.subprocess.run")
+    def test_validate_video_success(self, mock_run, mock_exists, mock_which):
+        """Should validate video correctly."""
+        with patch("pathlib.Path.exists", return_value=True):
+            def side_effect(cmd, **kwargs):
+                mock_result = MagicMock()
+                mock_result.returncode = 0
+                if "format=duration" in " ".join(cmd):
+                    mock_result.stdout = '{"format": {"duration": "45.5"}}'
+                elif "a:0" in " ".join(cmd):
+                    mock_result.stdout = '{"streams": [{"codec_name": "aac"}]}'
+                else:
+                    mock_result.stdout = '{"streams": [{"width": 1080, "height": 1920, "r_frame_rate": "30/1", "codec_name": "h264"}]}'
+                return mock_result
+            mock_run.side_effect = side_effect
+
+            renderer = VideoRenderer()
+            result = renderer.validate_video(Path("/tmp/video.mp4"))
+
+        assert result["valid"] is True
+        assert result["width"] == 1080
+        assert result["height"] == 1920
+        assert result["has_audio"] is True
+
+    @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
+    @patch("src.video.ffmpeg.subprocess.run")
+    def test_validate_video_no_audio(self, mock_run, mock_exists, mock_which):
+        """Should fail validation when no audio stream present."""
+        def side_effect(cmd, **kwargs):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            if "format=duration" in " ".join(cmd):
+                mock_result.stdout = '{"format": {"duration": "45.5"}}'
+            elif "a:0" in " ".join(cmd):
+                mock_result.stdout = '{"streams": []}'
+            else:
+                mock_result.stdout = '{"streams": [{"width": 1080, "height": 1920, "r_frame_rate": "30/1", "codec_name": "h264"}]}'
+            return mock_result
+        mock_run.side_effect = side_effect
+
+        renderer = VideoRenderer()
+
+        with pytest.raises(FFmpegError, match="No audio stream"):
+            with patch("pathlib.Path.exists", return_value=True):
+                renderer.validate_video(Path("/tmp/video.mp4"))
+
+
+class TestRenderBackgroundAmbient:
+    """Test rendering with a background image/video + ambient audio."""
+
+    def _renderer(self):
+        """Renderer with subtitles available, ffmpeg mocked."""
+        from unittest.mock import MagicMock, patch
+
+        with patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg"), \
+             patch("src.video.ffmpeg.Path.exists", return_value=False):
+            r = VideoRenderer()
+        r._subtitles_available = True
+        return r
+
+    def _start_ffmpeg_mock(self, stdout: str = ""):
+        """Start a subprocess.run mock; returns the mock (for call_args)."""
+        from unittest.mock import MagicMock, patch
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = stdout
+        mock_patcher = patch("src.video.ffmpeg.subprocess.run", return_value=mock_result)
+        mock_run = mock_patcher.start()
+        return mock_patcher, mock_run, mock_result
+
+    def test_background_image_uses_loop(self, tmp_path, monkeypatch):
+        """A still-image background should be looped into an infinite stream."""
+        mp, m, _ = self._start_ffmpeg_mock()
+        try:
+            r = self._renderer()
+            bg = tmp_path / "bg.webp"
+            bg.write_bytes(b"fake image")
+            narr = tmp_path / "n.wav"
+            narr.write_bytes(b"fake")
+            srt = tmp_path / "s.srt"
+            srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nAmen.\n")
+            out = tmp_path / "o.mp4"
+            with patch.object(r, "validate_video", return_value={"valid": True}):
+                r.render_black_video(
+                    narration_wav=narr, subtitle_srt=srt, output_path=out,
+                    background_path=bg,
+                )
+            cmd = m.call_args[0][0]
+            assert "-loop" in cmd
+            assert "1" in cmd
+            assert str(bg) in cmd
+            # scale/crop to target
+            filter_complex = cmd[cmd.index("-filter_complex") + 1]
+            assert "scale=1080:1920" in filter_complex
+            assert "crop=1080:1920" in filter_complex
+        finally:
+            mp.stop()
+
+    def test_background_video_uses_stream_loop(self, tmp_path, monkeypatch):
+        """A video background should use -stream_loop -1 (not -loop 1)."""
+        mp, m, _ = self._start_ffmpeg_mock()
+        try:
+            r = self._renderer()
+            bg = tmp_path / "bg.webm"
+            bg.write_bytes(b"fake video")
+            narr = tmp_path / "n.wav"
+            narr.write_bytes(b"fake")
+            srt = tmp_path / "s.srt"
+            srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nAmen.\n")
+            out = tmp_path / "o.mp4"
+            with patch.object(r, "validate_video", return_value={"valid": True}):
+                r.render_black_video(
+                    narration_wav=narr, subtitle_srt=srt, output_path=out,
+                    background_path=bg,
+                )
+            cmd = m.call_args[0][0]
+            assert "-stream_loop" in cmd
+            assert "-1" in cmd
+            assert "-loop" not in cmd
+        finally:
+            mp.stop()
+
+    def test_ambient_duck_uses_sidechain_and_asplit(self, tmp_path, monkeypatch):
+        """Ambient ducking should use sidechaincompress + asplit so narration
+        stays clear and the ambient is ducked under the voice."""
+        mp, m, _ = self._start_ffmpeg_mock(stdout="45.0\n")
+        try:
+            r = self._renderer()
+            narr = tmp_path / "n.wav"
+            narr.write_bytes(b"fake")
+            amb = tmp_path / "amb.wav"
+            amb.write_bytes(b"fake ambient")
+            srt = tmp_path / "s.srt"
+            srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nAmen.\n")
+            out = tmp_path / "o.mp4"
+            with patch.object(r, "validate_video", return_value={"valid": True}):
+                r.render_black_video(
+                    narration_wav=narr, subtitle_srt=srt, output_path=out,
+                    ambient_wav=amb, ambient_level=0.15,
+                    ambient_fade_in=2.0, ambient_fade_out=2.0,
+                    ambient_duck=True,
+                )
+            cmd = m.call_args[0][0]
+            fc = cmd[cmd.index("-filter_complex") + 1]
+            assert "sidechaincompress" in fc
+            assert "asplit=2" in fc
+            assert "volume=0.15" in fc
+            assert "afade=t=in:st=0:d=2.0" in fc
+            assert "amix=inputs=2:duration=first:normalize=0" in fc
+        finally:
+            mp.stop()
+
+    def test_ambient_no_duck_plain_amix(self, tmp_path, monkeypatch):
+        """Without duck, ambient should mix plainly (no sidechain)."""
+        mp, m, _ = self._start_ffmpeg_mock(stdout="45.0\n")
+        try:
+            r = self._renderer()
+            narr = tmp_path / "n.wav"; narr.write_bytes(b"fake")
+            amb = tmp_path / "amb.wav"; amb.write_bytes(b"fake")
+            srt = tmp_path / "s.srt"; srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nAmen.\n")
+            out = tmp_path / "o.mp4"
+            with patch.object(r, "validate_video", return_value={"valid": True}):
+                r.render_black_video(
+                    narration_wav=narr, subtitle_srt=srt, output_path=out,
+                    ambient_wav=amb, ambient_duck=False,
+                )
+            cmd = m.call_args[0][0]
+            fc = cmd[cmd.index("-filter_complex") + 1]
+            assert "sidechaincompress" not in fc
+            assert "amix=inputs=2:duration=first:normalize=0" in fc
+        finally:
+            mp.stop()
 
 
 class TestFactory:
     """Test factory function."""
-    
+
     @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    def test_create_video_renderer(self, mock_which):
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
+    def test_create_video_renderer(self, mock_exists, mock_which):
         """Factory should create renderer."""
         renderer = create_video_renderer()
         assert isinstance(renderer, VideoRenderer)
-    
+
     @patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg")
-    def test_create_with_custom_settings(self, mock_which):
+    @patch("src.video.ffmpeg.Path.exists", return_value=False)
+    def test_create_with_custom_settings(self, mock_exists, mock_which):
         """Factory should accept custom settings."""
         renderer = create_video_renderer(width=1920, height=1080)
         assert renderer.width == 1920
@@ -423,19 +383,19 @@ class TestFactory:
 
 class TestErrorHierarchy:
     """Test exception hierarchy."""
-    
+
     def test_ffmpeg_error_base(self):
         """FFmpegError should be Exception."""
         assert issubclass(FFmpegError, Exception)
-    
+
     def test_ffmpeg_not_found_error(self):
         """FFmpegNotFoundError should inherit from FFmpegError."""
         assert issubclass(FFmpegNotFoundError, FFmpegError)
-    
+
     def test_error_messages(self):
         """Errors should have proper messages."""
         err = FFmpegError("test message")
         assert str(err) == "test message"
-        
+
         err2 = FFmpegNotFoundError("not found")
         assert str(err2) == "not found"

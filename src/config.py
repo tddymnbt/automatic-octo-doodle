@@ -1,4 +1,4 @@
-"""Configuration module for ASMR Story Shorts.
+"""Configuration module for Daily Gospel / Daily Bread Shorts.
 
 This module centralizes all environment variable access and provides
 type-safe configuration. Secret values are NEVER logged or exposed.
@@ -74,10 +74,16 @@ class Settings:
     tts_model: str = field(default_factory=lambda: _get_env("TTS_MODEL", "gemini-3.1-flash-tts-preview"))
     tts_provider: str = field(default_factory=lambda: _get_env("TTS_PROVIDER", "kokoro"))
     tts_retry_count: int = field(default_factory=lambda: _get_int("TTS_RETRY_COUNT", 2))
-    kokoro_voice: str = field(default_factory=lambda: _get_env("KOKORO_VOICE", "af_heart"))
-    kokoro_speed: float = field(default_factory=lambda: _get_float("KOKORO_SPEED", 1.0))
+    kokoro_voice: str = field(default_factory=lambda: _get_env("KOKORO_VOICE", "am_fenrir"))
+    kokoro_speed: float = field(default_factory=lambda: _get_float("KOKORO_SPEED", 0.85))
     kokoro_lang: str = field(default_factory=lambda: _get_env("KOKORO_LANG", "a"))
     
+    # === AUDIO (reverb) SETTINGS ===
+    reverb_enabled: bool = field(default_factory=lambda: _get_bool("REVERB_ENABLED", True))
+    reverb_delay: int = field(default_factory=lambda: _get_int("REVERB_DELAY", 30))
+    reverb_decay: float = field(default_factory=lambda: _get_float("REVERB_DECAY", 0.4))
+    reverb_wet: float = field(default_factory=lambda: _get_float("REVERB_WET", 0.06))
+
     # === VIDEO SETTINGS ===
     video_width: int = field(default_factory=lambda: _get_int("VIDEO_WIDTH", 1080))
     video_height: int = field(default_factory=lambda: _get_int("VIDEO_HEIGHT", 1920))
@@ -89,10 +95,13 @@ class Settings:
     # === RUNTIME SETTINGS ===
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", True))
     log_level: str = field(default_factory=lambda: _get_env("LOG_LEVEL", "INFO"))
+    # Publishing slot identity (1-5) set by the CI workflow from the dispatch
+    # input. Pure observability label at launch — does not gate behavior.
+    slot: str = field(default_factory=lambda: _get_env("SLOT", "1"))
     
     # === CONTENT SETTINGS ===
     story_language: str = field(default_factory=lambda: _get_env("STORY_LANGUAGE", "en"))
-    content_style: str = field(default_factory=lambda: _get_env("CONTENT_STYLE", "calm_mysterious_atmospheric"))
+    content_style: str = field(default_factory=lambda: _get_env("CONTENT_STYLE", "gospel_daily_bread"))
     
     # === FACEBOOK SETTINGS ===
     facebook_graph_version: str = field(default_factory=lambda: _get_env("FACEBOOK_GRAPH_VERSION", ""))
@@ -101,12 +110,20 @@ class Settings:
     # === FEATURE FLAGS ===
     max_visuals_per_video: int = field(default_factory=lambda: _get_int("MAX_VISUALS_PER_VIDEO", 8))
     enable_ambient_audio: bool = field(default_factory=lambda: _get_bool("ENABLE_AMBIENT_AUDIO", True))
+    enable_background: bool = field(default_factory=lambda: _get_bool("ENABLE_BACKGROUND", True))
     enable_subtitles: bool = field(default_factory=lambda: _get_bool("ENABLE_SUBTITLES", True))
-    
+
+    # === AMBIENT / BACKGROUND TUNING ===
+    ambient_level: float = field(default_factory=lambda: _get_float("AMBIENT_LEVEL", 0.15))
+    ambient_fade_in: float = field(default_factory=lambda: _get_float("AMBIENT_FADE_IN", 2.0))
+    ambient_fade_out: float = field(default_factory=lambda: _get_float("AMBIENT_FADE_OUT", 2.0))
+    ambient_duck: bool = field(default_factory=lambda: _get_bool("AMBIENT_DUCK", True))
+
     # === PATHS ===
     project_root: Path = field(default_factory=lambda: Path(__file__).parent.parent)
     output_dir: Path = field(default_factory=lambda: Path(_get_env("OUTPUT_DIR", "output")))
     assets_dir: Path = field(default_factory=lambda: Path(_get_env("ASSETS_DIR", "assets/backgrounds")))
+    background_dir: Path = field(default_factory=lambda: Path(_get_env("BACKGROUND_DIR", "assets/backgrounds")))
     ambient_dir: Path = field(default_factory=lambda: Path(_get_env("AMBIENT_DIR", "assets/ambient")))
     data_dir: Path = field(default_factory=lambda: Path(_get_env("DATA_DIR", "data")))
     
@@ -157,6 +174,10 @@ class Settings:
             "kokoro_voice": self.kokoro_voice,
             "kokoro_speed": self.kokoro_speed,
             "kokoro_lang": self.kokoro_lang,
+            "reverb_enabled": self.reverb_enabled,
+            "reverb_delay": self.reverb_delay,
+            "reverb_decay": self.reverb_decay,
+            "reverb_wet": self.reverb_wet,
             "video_width": self.video_width,
             "video_height": self.video_height,
             "video_fps": self.video_fps,
@@ -165,13 +186,19 @@ class Settings:
             "max_duration_seconds": self.max_duration_seconds,
             "dry_run": self.dry_run,
             "log_level": self.log_level,
+            "slot": self.slot,
             "story_language": self.story_language,
             "content_style": self.content_style,
             "facebook_graph_version": self.facebook_graph_version,
             "facebook_retry_count": self.facebook_retry_count,
             "max_visuals_per_video": self.max_visuals_per_video,
             "enable_ambient_audio": self.enable_ambient_audio,
+            "enable_background": self.enable_background,
             "enable_subtitles": self.enable_subtitles,
+            "ambient_level": self.ambient_level,
+            "ambient_fade_in": self.ambient_fade_in,
+            "ambient_fade_out": self.ambient_fade_out,
+            "ambient_duck": self.ambient_duck,
         }
         
         if include_secrets:

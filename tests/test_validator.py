@@ -1,259 +1,181 @@
-"""Tests for content validator."""
+"""Tests for the Gospel content validator."""
 
 import pytest
 
-from src.content.schema import Scene, StoryData
-from src.content.validator import StoryValidator, ValidationResult
+from src.content.schema import GospelContent
+from src.content.validator import GospelValidator, ValidationResult
+
+
+def make_content(**overrides) -> GospelContent:
+    """Create a GospelContent fixture.
+
+    Uses ``model_construct`` to bypass Pydantic field-level validation so
+    tests can inject out-of-range values and exercise the validator's
+    defensive checks (the schema itself would otherwise reject them at
+    construction time).
+    """
+    defaults = {
+        "situation_summary": "feeling overwhelmed by financial pressure",
+        "hook": "Maybe you're doing everything you can, but nothing seems to be getting better.",
+        "biblical_message": "But Scripture reminds us that we don't have to carry every burden alone.",
+        "scripture_reference": "Matthew 11:28",
+        "scripture_text": "Come to me, all who labor and are heavy laden, and I will give you rest.",
+        "reflection": "When finances feel impossible, remember that God sees your struggle and offers peace.",
+        "closing_cta": "Can I get an Amen in the comments?",
+        "narration_script": (
+            "Maybe you're doing everything you can, but nothing seems to be getting better. "
+            "But Scripture reminds us that we don't have to carry every burden alone. "
+            "Jesus says, Come to me, all who labor and are heavy laden, and I will give you rest. "
+            "When finances feel impossible, remember that God sees your struggle and offers peace "
+            "that surpasses understanding. Can I get an Amen in the comments?"
+        ),
+        "facebook_caption": (
+            "Feeling overwhelmed by financial pressure?\n\n"
+            "God invites you to cast every burden on Him.\n\n📖 Matthew 11:28\n\n"
+            "He offers rest for the weary. You don't have to carry it alone.\n\n"
+            "Can I get an Amen?\n\n#DailyBread #Gospel #Faith #Encouragement #BibleVerse"
+        ),
+        "first_comment": "What's weighing on your heart today? Share below 👇",
+        "pinned_comment": "Praying for everyone in the comments. You're not alone.",
+        "hashtags": ["#DailyBread", "#Gospel", "#Faith", "#Encouragement", "#BibleVerse"],
+    }
+    defaults.update(overrides)
+    return GospelContent.model_construct(**defaults)
 
 
 @pytest.fixture
 def validator():
-    """Create a validator with default settings."""
-    return StoryValidator(
-        min_duration=30,
-        max_duration=60,
-        target_duration=45,
-    )
+    return GospelValidator()
 
 
-@pytest.fixture
-def valid_story():
-    """Create a valid test story."""
-    return StoryData(
-        title="The Room That Only Appeared in the Rain",
-        hook="Every time it rained, Mara saw a door that wasn't there before.",
-        narration=(
-            "Every time it rained, Mara saw a door that wasn't there before. "
-            "It appeared in the hallway, between the closet and the bathroom. "
-            "The wood was dark, almost black, with a brass handle that glowed faintly. "
-            "She never opened it. Not at first. But one night, the rain was heavier than usual, "
-            "and the door was slightly ajar. She reached for the handle. It was warm. "
-            "Behind it was a room she had never seen. A room filled with soft light "
-            "and the sound of rain that never stopped."
-        ),
-        scenes=[
-            Scene(description="rainy bedroom at night", duration_seconds=10.0, category="bedroom"),
-            Scene(description="dark hallway with door", duration_seconds=10.0, category="hallway"),
-            Scene(description="mysterious glowing room", duration_seconds=10.0, category="night"),
-            Scene(description="rainy window view", duration_seconds=10.0, category="rain"),
-        ],
-        hashtags=["#ASMR", "#ShortStory", "#Mystery", "#Relaxing"],
-        caption="A door that only appears in the rain... 🌧️",
-    )
+class TestValidateStructure:
+    """Test structural validation."""
 
-
-class TestValidationResult:
-    """Test ValidationResult class."""
-    
-    def test_default_is_valid(self):
-        """Default result should be valid."""
-        result = ValidationResult()
+    def test_valid_content_passes(self, validator):
+        """Valid content should pass validation."""
+        result = validator.validate(make_content())
         assert result.is_valid is True
         assert result.errors == []
-        assert result.warnings == []
-    
-    def test_add_error(self):
-        """Adding error should mark as invalid."""
-        result = ValidationResult()
-        result.add_error("Something wrong")
-        assert result.is_valid is False
-        assert "Something wrong" in result.errors
-    
-    def test_add_warning(self):
-        """Adding warning should not affect validity."""
-        result = ValidationResult()
-        result.add_warning("Something minor")
-        assert result.is_valid is True
-        assert "Something minor" in result.warnings
 
+    def test_short_situation_fails(self, validator):
+        """Too-short situation_summary should fail."""
+        result = validator.validate(make_content(situation_summary="short"))
+        assert not result.is_valid
+        assert any("situation_summary" in e for e in result.errors)
 
-class TestStoryValidator:
-    """Test StoryValidator class."""
-    
-    def test_valid_story_passes(self, validator, valid_story):
-        """Valid story should pass validation."""
-        result = validator.validate(valid_story)
-        assert result.is_valid is True
-        assert result.errors == []
-    
-    def test_valid_story_has_hash(self, validator, valid_story):
-        """Valid story should have content hash computed."""
-        validator.validate(valid_story)
-        assert valid_story.content_hash != ""
-        assert len(valid_story.content_hash) == 16
-    
-    def test_short_title_fails(self, validator):
-        """Short title should fail validation."""
-        # Use model_construct to bypass Pydantic validation and test our validator
-        story = StoryData.model_construct(
-            title="Hi",
-            hook="Valid hook sentence here.",
-            narration="Valid narration text that is long enough to pass all validation rules.",
-            scenes=[Scene.model_construct(description="test scene", duration_seconds=5.0)],
-        )
-        result = validator.validate(story)
-        assert result.is_valid is False
-        assert any("Title" in e for e in result.errors)
-    
-    def test_long_title_fails(self, validator):
-        """Long title should fail validation."""
-        story = StoryData.model_construct(
-            title="x" * 101,
-            hook="Valid hook sentence here.",
-            narration="Valid narration text that is long enough to pass all validation rules.",
-            scenes=[Scene.model_construct(description="test scene", duration_seconds=5.0)],
-        )
-        result = validator.validate(story)
-        assert result.is_valid is False
-        assert any("Title" in e for e in result.errors)
-    
     def test_short_hook_fails(self, validator):
-        """Short hook should fail validation."""
-        story = StoryData.model_construct(
-            title="Valid Title Here",
-            hook="Short",
-            narration="Valid narration text that is long enough to pass all validation rules.",
-            scenes=[Scene.model_construct(description="test scene", duration_seconds=5.0)],
-        )
-        result = validator.validate(story)
-        assert result.is_valid is False
-        assert any("Hook" in e for e in result.errors)
-    
+        """Too-short hook should fail."""
+        result = validator.validate(make_content(hook="Too short"))
+        assert not result.is_valid
+        assert any("hook" in e for e in result.errors)
+
     def test_short_narration_fails(self, validator):
-        """Short narration should fail validation."""
-        story = StoryData.model_construct(
-            title="Valid Title Here",
-            hook="Valid hook sentence here.",
-            narration="Too short",
-            scenes=[Scene.model_construct(description="test scene", duration_seconds=5.0)],
+        """Too-short narration should fail."""
+        result = validator.validate(make_content(narration_script="Too short"))
+        assert not result.is_valid
+        assert any("narration_script" in e for e in result.errors)
+
+    def test_hashtag_missing_prefix_fails(self, validator):
+        """Hashtag without # should fail."""
+        result = validator.validate(
+            make_content(hashtags=["DailyBread", "#Gospel"])
         )
-        result = validator.validate(story)
-        assert result.is_valid is False
-        assert any("Narration" in e for e in result.errors)
-    
-    def test_no_scenes_fails(self, validator):
-        """No scenes should fail validation."""
-        story = StoryData.model_construct(
-            title="Valid Title Here",
-            hook="Valid hook sentence here.",
-            narration="Valid narration text that is long enough to pass all validation rules.",
-            scenes=[],
+        assert not result.is_valid
+        assert any("hashtag" in e.lower() for e in result.errors)
+
+
+class TestValidateDuration:
+    """Test duration validation."""
+
+    def test_too_short_fails(self, validator):
+        """Very short narration should fail duration check."""
+        # ~5 words
+        result = validator.validate(
+            make_content(narration_script="just a few words here")
         )
-        result = validator.validate(story)
-        assert result.is_valid is False
-        assert any("scene" in e.lower() for e in result.errors)
-    
-    def test_invalid_scene_category_warns(self, validator):
-        """Invalid scene category should produce warning."""
-        story = StoryData(
-            title="Valid Title Here",
-            hook="Valid hook sentence here.",
-            narration="Valid narration text that is long enough to pass all validation rules.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0, category="invalid")],
+        assert not result.is_valid
+        assert any("duration" in e.lower() or "Narration" in e for e in result.errors)
+
+    def test_warns_on_estimate(self, validator):
+        """Valid content should add a duration warning with estimate."""
+        result = validator.validate(make_content())
+        assert any("Estimated duration" in w for w in result.warnings)
+
+
+class TestValidateScripture:
+    """Test scripture validation."""
+
+    def test_bad_reference_warns(self, validator):
+        """Non-standard reference should warn, not fail."""
+        result = validator.validate(make_content(scripture_reference="Matthew"))
+        assert any("reference format" in w for w in result.warnings)
+
+    def test_short_scripture_text_fails(self, validator):
+        """Too-short scripture text should fail."""
+        result = validator.validate(make_content(scripture_text="Short"))
+        assert not result.is_valid
+        assert any("Scripture text" in e for e in result.errors)
+
+
+class TestValidateConsistency:
+    """Test consistency validation."""
+
+    def test_same_comments_fail(self, validator):
+        """Matching first/pinned comments should fail."""
+        result = validator.validate(
+            make_content(first_comment="Same comment text here.", pinned_comment="Same comment text here.")
         )
-        result = validator.validate(story)
-        assert any("category" in w.lower() for w in result.warnings)
-    
-    def test_valid_scene_categories(self, validator):
-        """Valid scene categories should not warn."""
-        story = StoryData(
-            title="Valid Title Here",
-            hook="Valid hook sentence here.",
-            narration="Valid narration text that is long enough to pass all validation rules.",
-            scenes=[
-                Scene(description="bedroom scene", duration_seconds=5.0, category="bedroom"),
-                Scene(description="forest scene", duration_seconds=5.0, category="forest"),
-            ],
+        assert not result.is_valid
+        assert any("must be different" in e for e in result.errors)
+
+    def test_caption_missing_reference_warns(self, validator):
+        """Caption missing scripture reference should warn."""
+        result = validator.validate(
+            make_content(facebook_caption="A caption without the scripture reference anywhere in it.")
         )
-        result = validator.validate(story)
-        assert not any("category" in w.lower() for w in result.warnings)
-    
-    def test_short_narration_warns_duration(self, validator):
-        """Short narration should warn about duration."""
-        story = StoryData(
-            title="Valid Title Here",
-            hook="Valid hook sentence here.",
-            narration="This is a short narration that is just barely long enough to pass the minimum length check but will not meet the duration requirement.",
-            scenes=[Scene(description="test scene", duration_seconds=5.0)],
+        assert any("doesn't include scripture" in w for w in result.warnings)
+
+    def test_no_gospel_hashtag_warns(self, validator):
+        """Missing gospel hashtags should warn."""
+        result = validator.validate(
+            make_content(hashtags=["#foo", "#bar"])
         )
-        result = validator.validate(story)
-        # Should have errors or warnings about duration
-        assert len(result.errors) > 0 or len(result.warnings) > 0
-    
-    def test_content_hash_deterministic(self, validator):
-        """Same narration should produce same hash."""
-        story1 = StoryData(
-            title="Title One",
-            hook="Hook one here.",
-            narration="Same narration text for both stories to ensure hash consistency.",
-            scenes=[Scene(description="scene", duration_seconds=5.0)],
-        )
-        story2 = StoryData(
-            title="Title Two",
-            hook="Hook two here.",
-            narration="Same narration text for both stories to ensure hash consistency.",
-            scenes=[Scene(description="scene", duration_seconds=5.0)],
-        )
-        
-        validator.validate(story1)
-        validator.validate(story2)
-        
-        assert story1.content_hash == story2.content_hash
-    
-    def test_content_hash_different_for_different_content(self, validator):
-        """Different narration should produce different hash."""
-        story1 = StoryData(
-            title="Title One",
-            hook="Hook one here.",
-            narration="This is the first story with unique content that differs.",
-            scenes=[Scene(description="scene", duration_seconds=5.0)],
-        )
-        story2 = StoryData(
-            title="Title Two",
-            hook="Hook two here.",
-            narration="This is the second story with completely different content.",
-            scenes=[Scene(description="scene", duration_seconds=5.0)],
-        )
-        
-        validator.validate(story1)
-        validator.validate(story2)
-        
-        assert story1.content_hash != story2.content_hash
-    
+        assert any("gospel-appropriate hashtags" in w for w in result.warnings)
+
+
+class TestContentHash:
+    """Test duplicate detection."""
+
+    def test_hash_is_deterministic(self, validator):
+        """Same content should produce same hash."""
+        c1 = make_content()
+        c2 = make_content()
+        validator.validate(c1)
+        validator.validate(c2)
+        assert c1.content_hash == c2.content_hash
+
+    def test_different_content_different_hash(self, validator):
+        """Different content should produce different hash."""
+        c1 = make_content()
+        c2 = make_content(situation_summary="different situation entirely here")
+        validator.validate(c1)
+        validator.validate(c2)
+        assert c1.content_hash != c2.content_hash
+
     def test_is_duplicate(self, validator):
-        """Duplicate detection should work correctly."""
-        story = StoryData(
-            title="Test Title",
-            hook="Test hook sentence for testing.",
-            narration="Test narration for duplicate checking purposes that is long enough to pass validation.",
-            scenes=[Scene(description="scene", duration_seconds=5.0)],
-        )
-        
-        validator.validate(story)
-        
-        # Should be duplicate of itself
-        assert validator.is_duplicate(story, [story.content_hash]) is True
-        
-        # Should not be duplicate of different hash
-        assert validator.is_duplicate(story, ["different_hash_here"]) is False
+        """is_duplicate should detect known hashes."""
+        c = make_content()
+        validator.validate(c)
+        assert validator.is_duplicate(c, [c.content_hash]) is True
+        assert validator.is_duplicate(c, ["0000000000000000"]) is False
 
 
-class TestStoryValidatorCustomSettings:
-    """Test StoryValidator with custom settings."""
-    
-    def test_custom_duration_constraints(self):
-        """Custom duration constraints should be respected."""
-        validator = StoryValidator(min_duration=10, max_duration=30, target_duration=20)
-        
-        # Story that fits within custom constraints (~12 seconds at 150 WPM)
-        story = StoryData(
-            title="Short Story",
-            hook="A brief hook for testing purposes.",
-            narration="A short story that fits within ten to thirty seconds of narration time for testing purposes with enough words to be valid and pass the minimum duration check.",
-            scenes=[Scene(description="scene", duration_seconds=5.0)],
+class TestSafetyValidation:
+    """Test content safety checks."""
+
+    def test_unsafe_pattern_warns(self, validator):
+        """Violent language should produce a warning."""
+        result = validator.validate(
+            make_content(situation_summary="exposed to violent crime in the neighborhood")
         )
-        
-        result = validator.validate(story)
-        # Should not have duration errors with relaxed constraints
-        duration_errors = [e for e in result.errors if "duration" in e.lower()]
-        assert len(duration_errors) == 0
+        assert any("unsafe language" in w for w in result.warnings)

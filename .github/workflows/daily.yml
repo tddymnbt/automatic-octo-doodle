@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       slot:
-        description: 'Publishing slot (1-4)'
+        description: 'Publishing slot (1-5)'
         required: false
         default: '1'
         type: choice
@@ -13,6 +13,7 @@ on:
           - '2'
           - '3'
           - '4'
+          - '5'
       dry_run:
         description: 'Run in dry run mode (skip publishing)'
         required: false
@@ -24,17 +25,14 @@ on:
         default: 'false'
         type: boolean
 
+  # cron-job.org triggers the pipeline via repository_dispatch. The slot is
+  # carried in the event's client_payload (NOT in an inputs block, which
+  # GitHub ignores for repository_dispatch).
   repository_dispatch:
     types: [trigger-pipeline]
-    inputs:
-      slot:
-        description: 'Publishing slot'
-        required: false
-        default: '1'
 
-  schedule:
-    # Default schedule - override with cron-job.org for more control
-    - cron: '0 12 * * *'  # Daily at noon UTC
+# NOTE: no `schedule` trigger. cron-job.org is the sole scheduler (5 slots/day),
+# so the built-in GitHub cron is intentionally omitted to avoid a stray 6th run.
 
 # Never run more than one pipeline at a time: a concurrent run could both
 # publish a Reel (duplicate) and race on the git-backed history file.
@@ -49,12 +47,19 @@ env:
   META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
 
   # Non-secret configuration
+  # Slot identity: workflow_dispatch -> inputs.slot; repository_dispatch
+  # (cron-job.org) -> github.event.client_payload.slot; fallback '1'.
+  SLOT: ${{ inputs.slot || github.event.client_payload.slot || '1' }}
   AI_MODEL: gemini-3.5-flash-lite
   TTS_MODEL: gemini-3.1-flash-tts-preview
   TTS_PROVIDER: kokoro
-  KOKORO_VOICE: af_heart
-  KOKORO_SPEED: '1.0'
+  KOKORO_VOICE: am_onyx
+  KOKORO_SPEED: '0.85'
   KOKORO_LANG: a
+  REVERB_ENABLED: 'true'
+  REVERB_DELAY: '30'
+  REVERB_DECAY: '0.4'
+  REVERB_WET: '0.06'
   VIDEO_WIDTH: '1080'
   VIDEO_HEIGHT: '1920'
   VIDEO_FPS: '30'

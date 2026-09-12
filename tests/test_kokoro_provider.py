@@ -53,14 +53,13 @@ def fake_pipeline(*args, **kwargs):
 class TestKokoroCreation:
     """Test KokoroTTSProvider class creation."""
 
-    def test_default_voice_is_af_heart(self):
-        """Default voice should be af_heart (warm female ASMR)."""
-        assert KokoroTTSProvider.DEFAULT_VOICE == "af_heart"
+    def test_default_voice_is_am_fenrir(self):
+        """Default voice should be am_fenrir (deep male Gospel)."""
+        assert KokoroTTSProvider.DEFAULT_VOICE == "am_fenrir"
 
     def test_asmr_instruction_defined(self):
-        """ASMR voice instruction should be documented."""
+        """Voice instruction should document the reverent Gospel style."""
         assert "calm" in KokoroTTSProvider.ASMR_VOICE_INSTRUCTION.lower()
-        assert "asmr" in KokoroTTSProvider.ASMR_VOICE_INSTRUCTION.lower()
 
     def test_implements_protocol(self):
         """KokoroTTSProvider should implement TTSProvider protocol."""

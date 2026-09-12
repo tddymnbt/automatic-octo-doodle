@@ -1,10 +1,10 @@
-"""FFmpeg video renderer for ASMR story videos.
+"""FFmpeg video renderer for Daily Gospel / Daily Bread Shorts.
 
 This module renders the final video by combining:
-- Background images (with pan/zoom effects)
+- A solid black background (technical MVP: no images/stock/AI art)
 - TTS narration audio
+- Subtle church/chapel-style reverb applied to the narration
 - Burned-in subtitles
-- Optional ambient audio
 
 Output: 1080x1920 H.264/AAC MP4 at 30 FPS
 """
@@ -16,9 +16,6 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-
-from src.assets.models import Asset, AssetCategory
-from src.content.schema import StoryData
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +29,16 @@ class FFmpegNotFoundError(FFmpegError):
 
 
 class VideoRenderer:
-    """Renders ASMR story videos using FFmpeg.
+    """Renders Daily Gospel / Daily Bread videos using FFmpeg.
     
     This renderer:
-    1. Creates a visual sequence from assets matching story scenes
-    2. Applies pan/zoom effects (Ken Burns style)
-    3. Adds narration audio
-    4. Burns in subtitles
-    5. Outputs validated MP4
+    1. Uses a solid black background by default (technical MVP), or a
+       supplied background image/video layered beneath subtitles.
+    2. Applies subtle church/chapel-style reverb to the narration.
+    3. Optionally mixes a low ambient track (faded in/out, ducked under
+       the voice) so narration stays clear and foreground.
+    4. Burns in subtitles (middle-aligned).
+    5. Outputs a validated 1080x1920 H.264/AAC MP4 at 30 FPS.
     """
     
     # Video output settings
@@ -49,10 +48,16 @@ class VideoRenderer:
     VIDEO_CODEC = "libx264"
     AUDIO_CODEC = "aac"
     PIXEL_FORMAT = "yuv420p"
+
+    # Background video extensions (looped); anything else treated as still image.
+    VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".webm"}
     
-    # Transition settings
-    TRANSITION_DURATION = 0.5  # Crossfade duration in seconds
-    
+    # Reverb defaults (subtle church/chapel acoustic space).
+    REVERB_DISABLED = False
+    REVERB_DELAY = 30      # ms: time between reflections
+    REVERB_DECAY = 0.4     # amplitude decay of the echoes (0=off, <1 = decay)
+    REVERB_WET = 0.06      # gain of the reflections (small = subtle)
+
     def __init__(
         self,
         width: int = WIDTH,
@@ -110,7 +115,20 @@ class VideoRenderer:
         return self._subtitles_available
 
     def _find_ffmpeg(self) -> str:
-        """Find FFmpeg executable."""
+        """Find FFmpeg executable, preferring a libass-enabled build.
+
+        Homebrew's regular ``ffmpeg`` formula ships without libass (no
+        ``subtitles``/``ass`` filters); ``ffmpeg-full`` includes it. Prefer the
+        full build when present so burned-in subtitles work locally, fall back
+        to PATH. The GitHub Actions runner installs a libass-enabled FFmpeg,
+        so CI resolves via PATH.
+        """
+        for candidate in (
+            "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+            "/usr/local/opt/ffmpeg-full/bin/ffmpeg",
+        ):
+            if Path(candidate).exists():
+                return candidate
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             raise FFmpegNotFoundError("FFmpeg not found in PATH")
@@ -134,324 +152,6 @@ class VideoRenderer:
             for line in result.stdout.splitlines()
         )
 
-    def render(
-        self,
-        story: StoryData,
-        assets: list[Asset],
-        narration_audio: Path,
-        subtitle_file: Path,
-        output_path: Path,
-        ambient_audio: Path | None = None,
-        ambient_volume: float = 0.1,
-    ) -> Path:
-        """Render the final video.
-        
-        Args:
-            story: Story data with scenes
-            assets: Selected visual assets
-            narration_audio: Path to TTS narration WAV
-            subtitle_file: Path to SRT subtitle file
-            output_path: Output MP4 path
-            ambient_audio: Optional ambient audio file
-            ambient_volume: Ambient audio volume (0.0-1.0)
-            
-        Returns:
-            Path to rendered video
-            
-        Raises:
-            FFmpegError: If rendering fails
-        """
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Create temporary directory for intermediate files
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            
-            # Build visual segments
-            segment_files = self._build_visual_segments(
-                story, assets, tmpdir_path
-            )
-            
-            if not segment_files:
-                raise FFmpegError("No visual segments created")
-            
-            # Concatenate segments
-            concat_file = tmpdir_path / "concat.txt"
-            self._write_concat_file(segment_files, concat_file)
-            
-            # Build final video
-            self._render_final_video(
-                concat_file=concat_file,
-                narration_audio=narration_audio,
-                subtitle_file=subtitle_file,
-                output_path=output_path,
-                ambient_audio=ambient_audio,
-                ambient_volume=ambient_volume,
-            )
-        
-        # Validate output
-        self.validate_video(output_path)
-        
-        logger.info(f"Video rendered: {output_path}")
-        return output_path
-    
-    def _build_visual_segments(
-        self,
-        story: StoryData,
-        assets: list[Asset],
-        tmpdir: Path,
-    ) -> list[Path]:
-        """Build visual segments for each scene.
-        
-        Args:
-            story: Story data
-            assets: Available assets
-            tmpdir: Temporary directory
-            
-        Returns:
-            List of segment video file paths
-        """
-        segment_files = []
-        
-        # Group assets by category (using string keys since scene.category is a string)
-        assets_by_category: dict[str, list[Asset]] = {}
-        for asset in assets:
-            cat_str = asset.category.value if isinstance(asset.category, AssetCategory) else str(asset.category)
-            if cat_str not in assets_by_category:
-                assets_by_category[cat_str] = []
-            assets_by_category[cat_str].append(asset)
-        
-        for i, scene in enumerate(story.scenes):
-            # Get asset for this scene (scene.category is a string)
-            scene_category = scene.category
-            scene_assets = assets_by_category.get(scene_category, [])
-            
-            if not scene_assets:
-                logger.warning(f"No assets for scene {i+1} category '{scene_category}'")
-                # Use first available asset as fallback
-                for cat_assets in assets_by_category.values():
-                    if cat_assets:
-                        scene_assets = cat_assets
-                        break
-            
-            if not scene_assets:
-                raise FFmpegError("No visual assets available")
-            
-            # Use first matching asset
-            asset = scene_assets[0]
-            
-            # Create segment
-            segment_file = tmpdir / f"segment_{i:02d}.mp4"
-            
-            if asset.is_image:
-                self._create_image_segment(
-                    asset=asset,
-                    duration=scene.duration_seconds,
-                    output=segment_file,
-                    is_first=(i == 0),
-                    is_last=(i == len(story.scenes) - 1),
-                )
-            elif asset.is_video:
-                self._create_video_segment(
-                    asset=asset,
-                    duration=scene.duration_seconds,
-                    output=segment_file,
-                )
-            else:
-                raise FFmpegError(f"Unsupported asset type: {asset.path}")
-            
-            segment_files.append(segment_file)
-        
-        return segment_files
-    
-    def _create_image_segment(
-        self,
-        asset: Asset,
-        duration: float,
-        output: Path,
-        is_first: bool = False,
-        is_last: bool = False,
-    ) -> None:
-        """Create video segment from still image with Ken Burns effect.
-        
-        Args:
-            asset: Image asset
-            duration: Segment duration in seconds
-            output: Output file path
-            is_first: Whether this is the first segment
-            is_last: Whether this is the last segment
-        """
-        # Ken Burns effect: slow zoom/pan
-        # Calculate zoom factor (start at 1.0, end at 1.15 over duration)
-        zoom_start = 1.0
-        zoom_end = 1.15
-        
-        # Build filter complex
-        filters = [
-            # Scale and crop to maintain aspect
-            f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase",
-            f"crop={self.width}:{self.height}",
-            # Apply zoom/pan animation
-            (
-                f"zoompan=z='min({zoom_start}+(zoom/100),{zoom_end})':"
-                f"d={int(duration * self.fps)}:s={self.width}x{self.height}"
-            ),
-            # Fade in/out
-            (
-                f"fade=t=in:st=0:d={self.TRANSITION_DURATION},"
-                f"fade=t=out:st={duration - self.TRANSITION_DURATION}:d={self.TRANSITION_DURATION}"
-            ),
-        ]
-        
-        filter_str = ",".join(filters)
-        
-        cmd = [
-            self._ffmpeg_path,
-            "-y",  # Overwrite
-            "-loop", "1",
-            "-i", str(asset.path),
-            "-t", str(duration),
-            "-vf", filter_str,
-            "-c:v", self.video_codec,
-            "-pix_fmt", self.pixel_format,
-            "-r", str(self.fps),
-            "-preset", "medium",
-            "-crf", "23",
-            str(output),
-        ]
-        
-        self._run_ffmpeg(cmd)
-    
-    def _create_video_segment(
-        self,
-        asset: Asset,
-        duration: float,
-        output: Path,
-    ) -> None:
-        """Create video segment from video asset.
-        
-        Args:
-            asset: Video asset
-            duration: Target duration
-            output: Output file path
-        """
-        cmd = [
-            self._ffmpeg_path,
-            "-y",
-            "-i", str(asset.path),
-            "-t", str(duration),
-            "-vf", f"scale={self.width}:{self.height}:force_original_aspect_ratio=increase,crop={self.width}:{self.height}",
-            "-c:v", self.video_codec,
-            "-pix_fmt", self.pixel_format,
-            "-r", str(self.fps),
-            "-preset", "medium",
-            "-crf", "23",
-            "-an",  # No audio from source video
-            str(output),
-        ]
-        
-        self._run_ffmpeg(cmd)
-    
-    def _write_concat_file(self, segment_files: list[Path], concat_file: Path) -> None:
-        """Write FFmpeg concat file.
-        
-        Args:
-            segment_files: List of segment paths
-            concat_file: Output concat file path
-        """
-        content = "\n".join(f"file '{f}'" for f in segment_files)
-        concat_file.write_text(content)
-    
-    def _render_final_video(
-        self,
-        concat_file: Path,
-        narration_audio: Path,
-        subtitle_file: Path,
-        output_path: Path,
-        ambient_audio: Path | None,
-        ambient_volume: float,
-    ) -> None:
-        """Render final video with audio and subtitles.
-        
-        Args:
-            concat_file: Concat file with segments
-            narration_audio: Narration audio file
-            subtitle_file: SRT subtitle file
-            output_path: Output video path
-            ambient_audio: Optional ambient audio
-            ambient_volume: Ambient volume level
-        """
-        # Build video filter list; subtitle burn only if the FFmpeg build
-        # actually provides the subtitles filter (libass).
-        video_filters: list[str] = []
-        if self.enable_subtitles and self._subtitles_available:
-            # Pass the absolute subtitle path to ffmpeg's subtitles filter.
-            # FFmpeg resolves the path relative to the PROCESS CWD, not the
-            # temp dir, so we must use an absolute path. Escape quote + backslash
-            # for ffmpeg's filtergraph quoting.
-            sub_path = str(subtitle_file.resolve())
-            sub_path = sub_path.replace("\\", "\\\\").replace("'", "'\\''")
-            # force_style colon-options are protected by quoting the whole value.
-            video_filters.append(
-                f"subtitles='{sub_path}':force_style="
-                "'FontSize=48,FontName=Arial,Outline=2,Shadow=2,Alignment=2,MarginV=100'"
-            )
-        
-        # Audio filter
-        if ambient_audio and ambient_audio.exists():
-            # Mix narration with ambient
-            audio_filter = (
-                f"[1:a]volume=1.0[nar];"
-                f"[2:a]volume={ambient_volume}[amb];"
-                f"[nar][amb]amix=inputs=2:duration=first:dropout_transition=0[aout]"
-            )
-            inputs = [
-                "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                "-i", str(narration_audio),
-                "-i", str(ambient_audio),
-            ]
-        else:
-            # Narration only
-            audio_filter = "[1:a]anull[aout]"
-            inputs = [
-                "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                "-i", str(narration_audio),
-            ]
-        
-        cmd = [
-            self._ffmpeg_path,
-            "-y",
-            *inputs,
-            "-filter_complex", f"{audio_filter}",
-            "-map", "0:v",
-            "-map", "[aout]",
-        ]
-        if video_filters:
-            # Always pin the target pixel format in the filter chain too —
-            # -pix_fmt alone can be overridden by full-range input metadata
-            # (yuvj420p). format= yields a deterministic yuv420p stream.
-            video_filters.append(f"format={self.pixel_format}")
-            cmd += ["-vf", ",".join(video_filters)]
-        cmd += [
-            "-c:v", self.video_codec,
-            "-pix_fmt", self.pixel_format,
-            # Set standard metadata so the output is limited-range (tv),
-            # matching the media verification gate's expected yuv420p.
-            "-color_range", "tv",
-            "-colorspace", "bt709",
-            "-r", str(self.fps),
-            "-c:a", self.audio_codec,
-            "-ar", "48000",  # Resample all mixes to 48kHz (Facebook/Reels + gate)
-            "-b:a", "128k",
-            "-preset", "medium",
-            "-crf", "23",
-            "-shortest",
-            str(output_path),
-        ]
-        
-        self._run_ffmpeg(cmd)
-    
     def _run_ffmpeg(self, cmd: list[str]) -> subprocess.CompletedProcess:
         """Run FFmpeg command.
         
@@ -484,6 +184,270 @@ class VideoRenderer:
         
         return result
     
+    def apply_reverb(
+        self,
+        input_wav: Path,
+        output_wav: Path,
+        *,
+        delay_ms: int | None = None,
+        decay: float | None = None,
+        wet: float | None = None,
+    ) -> Path:
+        """Apply subtle church-style reverb to a WAV file using FFmpeg ``aecho``.
+
+        The aecho filter adds early reflections at the given delay. ``wet``
+        controls the reflection amplitude; ``decay`` is the echo's own decay
+        factor. Values default to the class constants for a soft chapel feel.
+        """
+        delay_ms = delay_ms if delay_ms is not None else self.REVERB_DELAY
+        decay = decay if decay is not None else self.REVERB_DECAY
+        wet = wet if wet is not None else self.REVERB_WET
+        out = Path(output_wav)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            self._ffmpeg_path, "-y",
+            "-i", str(input_wav),
+            "-af", f"aecho=1:{wet}:{delay_ms}:{decay}",
+            "-ar", "24000",
+            str(out),
+        ]
+        self._run_ffmpeg(cmd)
+        logger.info(f"Reverb applied: {out}")
+        return out
+
+    def render_black_video(
+        self,
+        narration_wav: Path,
+        subtitle_srt: Path,
+        output_path: Path,
+        *,
+        subtitle_style: str | None = None,
+        reverb: bool = True,
+        reverb_delay_ms: int | None = None,
+        reverb_decay: float | None = None,
+        reverb_wet: float | None = None,
+        sync_segments: list | None = None,
+        background_path: Path | str | None = None,
+        ambient_wav: Path | str | None = None,
+        ambient_level: float = 0.15,
+        ambient_fade_in: float = 2.0,
+        ambient_fade_out: float = 2.0,
+        ambient_duck: bool = True,
+    ) -> Path:
+        """Render an MP4 (black or background-image subject) with burned-in subtitles.
+
+        Pipeline:
+          narration.wav
+            -> optional reverb (aecho)
+            -> black 1080x1920 video (colour source) OR a background
+               image/video scaled+scaled-cropped to 1080x1920
+            + optional ambient track: low level, faded in/out, ducked under
+              the narration so the voice stays clear and foreground
+            + subtitle SRT/ASS (ass filter / libass), middle-aligned
+            -> 1080x1920 H.264/AAC MP4
+
+        Args:
+            narration_wav: 24 kHz mono WAV (raw or post-reverb)
+            subtitle_srt: SRT file with segment-aligned text (fallback)
+            output_path: final MP4 destination
+            subtitle_style: optional override for force_style string (SRT path only)
+            reverb: apply aecho reverb before mixing
+            reverb_delay_ms: ms between reflections
+            reverb_decay: amplitude decay factor
+            reverb_wet: reflection gain
+            sync_segments: optional speech-aligned segments (SyncedSegment) for
+                accurate ASS generation with absolute positioning. If provided,
+                an ASS file is created and burned instead of the SRT path.
+            background_path: optional image (.jpg/.webp/.png) or video
+                (.mp4/.webm) used as the visual base layer. If None, a pure
+                black background is used (backward-compatible).
+            ambient_wav: optional ambient/background audio track. Mixed at a
+                low level (ambient_level), faded in/out, and optionally ducked
+                under the narration so the voice stays clear.
+            ambient_level: ambient volume as a fraction of narration (e.g.
+                0.15 = 15%). Relative to the ducked/attenuated ambient.
+            ambient_fade_in: seconds to fade ambient in from silence.
+            ambient_fade_out: seconds to fade ambient out to silence at the end.
+            ambient_duck: duck the ambient under the narration (sidechain).
+
+        Returns:
+            Path to the final rendered MP4
+        """
+        from src.video.subtitles import entries_to_ass
+
+        # ---- Reverb on narration (unchanged) ----
+        audio_wav = narration_wav
+        if reverb:
+            tmp = output_path.parent / (output_path.stem + "_reverb.wav")
+            audio_wav = self.apply_reverb(
+                narration_wav, tmp,
+                delay_ms=reverb_delay_ms, decay=reverb_decay, wet=reverb_wet,
+            )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        # ---- Subtitle burn-in filter (unchanged) ----
+        if sync_segments:
+            from src.video.subtitles import SubtitleGenerator, entries_to_ass
+            gen = SubtitleGenerator()
+            entries = gen.from_synced_segments(sync_segments)
+            ass_path = out.parent / (out.stem + "_subs.ass")
+            ass_text = entries_to_ass(
+                entries,
+                width=self.width,
+                height=self.height,
+                font_name="DejaVu Sans",
+                font_size=56,
+                margin_v=0,
+                primary="FFFFFF",
+                outline_color="000000",
+            )
+            ass_path.write_text(ass_text, encoding="utf-8")
+            sub_path = str(ass_path.resolve()).replace("\\", "\\\\").replace("'", "'\\''")
+            vf = f"ass='{sub_path}'"
+            logger.info(f"Using ASS burn-in: {ass_path}")
+        else:
+            if subtitle_style is None:
+                subtitle_style = (
+                    "FontName=DejaVu Sans,"
+                    "FontSize=34,"
+                    "PrimaryColour=&H00FFFFFF,"
+                    "OutlineColour=&H80000000,"
+                    "BorderStyle=1,"
+                    "Outline=2,"
+                    "Shadow=1,"
+                    "Alignment=5,"
+                    "MarginV=0"
+                )
+            sub_path = str(subtitle_srt.resolve()).replace("\\", "\\\\").replace("'", "'\\''")
+            style_safe = subtitle_style.replace("'", "'\\''")
+            vf = f"subtitles='{sub_path}':force_style='{style_safe}'"
+            logger.info(f"Using SRT burn-in: {subtitle_srt}")
+
+        # ---- Build the FFmpeg command ----
+        cmd = [self._ffmpeg_path, "-y"]
+
+        # Input 0: video source (background image/video OR pure black).
+        bg = Path(background_path) if background_path is not None else None
+        use_background = bg is not None and bg.exists()
+        if use_background:
+            assert bg is not None
+            if bg.suffix.lower() in self.VIDEO_SUFFIXES:
+                # Video background: loop to cover narration
+                cmd += ["-stream_loop", "-1", "-i", str(bg)]
+            else:
+                # Still image background: loop as an infinite video stream
+                cmd += ["-loop", "1", "-i", str(bg)]
+        else:
+            cmd += [
+                "-f", "lavfi",
+                "-i", f"color=c=black:s={self.width}x{self.height}:r={self.fps}:d=900",
+            ]
+
+        # Input 1: narration (post-reverb).
+        cmd += ["-i", str(Path(audio_wav))]
+
+        # Input 2 (optional): ambient track.
+        amb = Path(ambient_wav) if ambient_wav is not None else None
+        use_ambient = amb is not None and amb.exists()
+        if use_ambient:
+            cmd += ["-i", str(amb)]
+
+        # ---- Audio filtergraph ----
+        # Label narration always [1:a]; ambient (if any) is [2:a].
+        fc = []
+        narration_dur = self._probe_duration(Path(audio_wav)) if use_ambient else 0.0
+
+        if use_ambient:
+            amb_fade_out_st = max(0.0, narration_dur - ambient_fade_out)
+            amb_filter = (
+                f"[2:a]aresample=48000,volume={ambient_level},"
+                f"afade=t=in:st=0:d={ambient_fade_in},"
+                f"afade=t=out:st={amb_fade_out_st:.3f}:d={ambient_fade_out}[aa]"
+            )
+            fc.append(amb_filter)
+            if ambient_duck:
+                # Fork narration: one copy drives sidechain, one mixes with
+                # attenuated ambient. (FFmpeg requires asplit for labels
+                # consumed by multiple filters.)
+                fc.append("[1:a]aresample=48000,volume=1.0,asplit=2[narr][side]")
+                fc.append(
+                    "[aa][side]sidechaincompress="
+                    "threshold=0.05:ratio=6:attack=20:release=300[duck]"
+                )
+                fc.append("[narr][duck]amix=inputs=2:duration=first:normalize=0[a]")
+            else:
+                fc.append("[1:a]aresample=48000,volume=1.0[na]")
+                fc.append("[na][aa]amix=inputs=2:duration=first:normalize=0[a]")
+        else:
+            fc.append("[1:a]aresample=48000[a]")
+
+        # ---- Video filtergraph ----
+        if use_background:
+            v0 = (
+                f"[0:v]scale={self.width}:{self.height}:force_original_aspect_ratio=increase,"
+                f"crop={self.width}:{self.height},"
+            )
+        else:
+            v0 = "[0:v]"
+        fc.append(f"{v0}{vf},format=yuv420p[v]")
+
+        cmd += ["-filter_complex", ";".join(fc)]
+
+        encode_args = [
+            "-map", "[v]", "-map", "[a]",
+            "-c:v", self.video_codec,
+            "-pix_fmt", self.pixel_format,
+            "-color_range", "tv",
+            "-colorspace", "bt709",
+            "-r", str(self.fps),
+            "-c:a", self.audio_codec,
+            "-ar", "48000",
+            "-b:a", "128k",
+            "-preset", "medium",
+            "-crf", "23",
+            "-shortest",
+            str(out),
+        ]
+        cmd += encode_args
+        self._run_ffmpeg(cmd)
+
+        bg_desc = str(bg) if use_background else "black"
+        logger.info(f"Video rendered ({bg_desc} background): {out}")
+        return out
+
+    def _probe_duration(self, media: Path) -> float:
+        """Return the duration (seconds) of a media file via ffprobe.
+
+        Returns 0.0 if probing fails (e.g. in unit tests where ffprobe is
+        mocked away) rather than raising, so render is never blocked.
+        """
+        ffprobe = shutil.which("ffprobe")
+        if not ffprobe and self._ffmpeg_path:
+            # Derive ffprobe from the ffmpeg path (same dir).
+            candidate = str(Path(self._ffmpeg_path).with_name("ffprobe"))
+            if Path(candidate).exists():
+                ffprobe = candidate
+        if not ffprobe:
+            logger.warning("ffprobe not found; ambient fade-out timing degraded")
+            return 0.0
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "csv=p=0",
+                    str(media),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return float(result.stdout.strip())
+        except (ValueError, subprocess.SubprocessError, OSError):
+            return 0.0
+
     def validate_video(self, video_path: Path) -> dict:
         """Validate rendered video meets specifications.
         

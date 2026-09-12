@@ -6,6 +6,7 @@ in ``{data_dir}/run_history.jsonl``. The store is used to:
 * Prevent duplicate Reels: a story whose content hash was already published
   live is skipped on subsequent runs.
 * Keep an audit trail of runs (status, timestamps, publish ids, errors).
+* Track situation summaries and scripture references for anti-repetition.
 
 Design notes:
 
@@ -48,7 +49,10 @@ class RunRecord:
     timestamp: str
     story_hash: str
     status: str
+    slot: str = ""
     story_title: str = ""
+    situation_summary: str = ""
+    scripture_reference: str = ""
     dry_run: bool = False
     video_path: str = ""
     post_id: str = ""
@@ -99,15 +103,7 @@ class HistoryStore:
     # ------------------------------------------------------------------
 
     def record_run(self, record: RunRecord) -> None:
-        """Append a run record to the history file.
-
-        The file is opened in append mode and the record is written as a
-        single line. A crashed mid-write write can at worst leave a partial
-        line, which ``load_history()`` tolerates (skipped with a warning).
-
-        Args:
-            record: The run record to persist.
-        """
+        """Append a run record to the history file."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         line = json.dumps(record.to_dict(), sort_keys=True) + "\n"
@@ -121,7 +117,10 @@ class HistoryStore:
         *,
         story_hash: str,
         status: str,
+        slot: str = "",
         story_title: str = "",
+        situation_summary: str = "",
+        scripture_reference: str = "",
         dry_run: bool = False,
         video_path: str = "",
         post_id: str = "",
@@ -132,31 +131,16 @@ class HistoryStore:
         asset_count: int = 0,
         tts_provider: str = "",
     ) -> RunRecord:
-        """Build and record a run in one call.
-
-        Args:
-            story_hash: Content hash of the story (duplicate key).
-            status: One of STATUS_* constants.
-            story_title: Story title (non-secret).
-            dry_run: True if the run was a dry run.
-            video_path: Path to the final video (may be empty).
-            post_id: Facebook post id (published runs only).
-            video_id: Facebook video id (published runs only).
-            error: Error message (non-secret) for failed runs.
-            attempts: Number of generation attempts.
-            duration_s: Narration duration in seconds.
-            asset_count: Number of visual assets used.
-            tts_provider: TTS provider name.
-
-        Returns:
-            The created RunRecord (also persisted).
-        """
+        """Build and record a run in one call."""
         record = RunRecord(
             run_id=new_run_id(),
             timestamp=_now_iso(),
             story_hash=story_hash,
             status=status,
+            slot=slot,
             story_title=story_title,
+            situation_summary=situation_summary,
+            scripture_reference=scripture_reference,
             dry_run=dry_run,
             video_path=video_path,
             post_id=post_id,
@@ -175,13 +159,7 @@ class HistoryStore:
     # ------------------------------------------------------------------
 
     def load_history(self) -> list[RunRecord]:
-        """Load all run records.
-
-        Corrupt lines are skipped with a warning (never fatal).
-
-        Returns:
-            List of RunRecords in file order (oldest first).
-        """
+        """Load all run records. Corrupt lines skipped with warning."""
         if not self.path.exists():
             return []
 
@@ -193,6 +171,9 @@ class HistoryStore:
                     continue
                 try:
                     data = json.loads(line)
+                    # Handle legacy records missing new fields
+                    data.setdefault("situation_summary", "")
+                    data.setdefault("scripture_reference", "")
                     records.append(RunRecord(**data))
                 except (json.JSONDecodeError, TypeError, ValueError) as e:
                     logger.warning(
@@ -200,26 +181,28 @@ class HistoryStore:
                     )
         return records
 
+    def recent_entries(self, limit: int | None = None) -> list[dict]:
+        """Return recent situation summaries and scripture references for anti-repetition."""
+        entries = []
+        for record in self.load_history():
+            if record.situation_summary and record.scripture_reference:
+                entries.append({
+                    "situation_summary": record.situation_summary,
+                    "scripture_reference": record.scripture_reference,
+                })
+        if limit is not None:
+            return entries[-limit:]
+        return entries
+
     def recent_hashes(self, limit: int | None = None) -> list[str]:
-        """Return story hashes in file order.
-
-        Args:
-            limit: If set, return only the last N hashes.
-
-        Returns:
-            List of story hashes (oldest first).
-        """
+        """Return story hashes in file order."""
         hashes = [r.story_hash for r in self.load_history() if r.story_hash]
         if limit is not None:
             return hashes[-limit:]
         return hashes
 
     def was_published(self, story_hash: str) -> bool:
-        """Return True if a story hash was already published live.
-
-        Only records with ``status == "published"`` and ``dry_run == false``
-        count. Dry-run records never block real publishing.
-        """
+        """Return True if a story hash was already published live."""
         for record in self.load_history():
             if (
                 record.story_hash == story_hash
@@ -230,11 +213,7 @@ class HistoryStore:
         return False
 
     def last_run(self) -> RunRecord | None:
-        """Return the most recent run record, or None if empty.
-
-        The last line of the file is the most recent record (append-only),
-        so this reads from the end without loading everything.
-        """
+        """Return the most recent run record, or None if empty."""
         if not self.path.exists():
             return None
 
@@ -248,7 +227,10 @@ class HistoryStore:
         if not last_line:
             return None
         try:
-            return RunRecord(**json.loads(last_line))
+            data = json.loads(last_line)
+            data.setdefault("situation_summary", "")
+            data.setdefault("scripture_reference", "")
+            return RunRecord(**data)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
             logger.warning(f"Skipping corrupt history last line: {e}")
             return None

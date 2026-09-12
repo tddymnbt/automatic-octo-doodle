@@ -15,6 +15,7 @@ class TestAssetCategory:
         expected = [
             "bedroom", "forest", "rain", "city", "hallway",
             "cafe", "ocean", "night", "window", "street",
+            "gospel", "sunrise", "mountains", "garden", "church", "nature",
         ]
         actual = AssetCategory.all_categories()
         assert sorted(actual) == sorted(expected)

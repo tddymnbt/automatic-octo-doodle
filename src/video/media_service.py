@@ -13,13 +13,13 @@ This module is the application's single boundary for media operations:
 It wraps:
 - The vendored ffmpeg-skill CLI tools (probe/check) for deterministic
   media probing and platform-compliance verification.
-- The existing VideoRenderer for composition (Ken Burns segments,
-  narration audio, subtitles).
+- The existing VideoRenderer for composition (black background,
+  narration audio, reverb, subtitles).
 
 The application calls MediaService methods instead of scattering raw
 ffmpeg/ffprobe commands across modules.
 
-Flow: probe → render → check → verify → structured result.
+Flow: probe → check → verify → structured result.
 """
 from __future__ import annotations
 
@@ -29,8 +29,6 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.assets.models import Asset
-from src.content.schema import StoryData
 from src.video.ffmpeg import VideoRenderer
 
 logger = logging.getLogger(__name__)
@@ -297,34 +295,6 @@ class MediaService:
             f"{len(result.errors)} errors, {len(result.warnings)} warnings"
         )
         return result
-
-    # ------------------------------------------------------------------
-    # RENDER (delegates composition to VideoRenderer)
-    # ------------------------------------------------------------------
-    def render(
-        self,
-        story: StoryData,
-        assets: list[Asset],
-        narration_audio: Path | str,
-        subtitle_file: Path | str,
-        output_path: Path | str,
-        ambient_audio: Path | str | None = None,
-        ambient_volume: float = 0.1,
-    ) -> Path:
-        """Render the final video (delegates composition to VideoRenderer).
-
-        Returns:
-            Path to rendered video.
-        """
-        return self.renderer.render(
-            story=story,
-            assets=assets,
-            narration_audio=Path(narration_audio),
-            subtitle_file=Path(subtitle_file),
-            output_path=Path(output_path),
-            ambient_audio=Path(ambient_audio) if ambient_audio else None,
-            ambient_volume=ambient_volume,
-        )
 
     # ------------------------------------------------------------------
     # CONTACT SHEET (visual QA, not used for production gating)

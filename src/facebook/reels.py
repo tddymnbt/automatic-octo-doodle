@@ -5,10 +5,14 @@ API ``/page_id/video_reels`` endpoint (three-step resumable upload):
 
     1. POST  /{page_id}/video_reels?upload_phase=START
             -> {video_id, upload_url}
-    2. PUT   {upload_url}  (binary video, Authorization: OAuth <token>)
+    2. PUT   {upload_url}  (binary video, Authorization: OAuth ***
             -> {success, h}
     3. POST  /{page_id}/video_reels?upload_phase=FINISH&video_id=...
             -> {success, post_id, message}
+
+After publishing, posts a first comment and a pinned comment on the Reel
+(when not in dry-run mode). Pinning requires the ``pages_manage_engagement``
+permission; failures are logged but do not block the pipeline.
 
 Flow respects the project's safety rules:
 - ``DRY_RUN`` mode NEVER hits the network; it returns a dry-run result
@@ -21,6 +25,9 @@ Flow respects the project's safety rules:
 
 Permissions required on the Page access token:
     pages_read_engagement, pages_manage_posts
+
+For comment posting/pinning:
+    pages_manage_engagement, pages_show_list
 
 Rate limit: 30 API-published posts per 24-hour moving period (enforced by
 Meta on the POST /{page_id}/video_reels endpoint).
@@ -36,7 +43,7 @@ from typing import Any
 import requests
 
 from src.config import settings
-from src.content.schema import StoryData
+from src.content.schema import GospelContent
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +54,12 @@ DEFAULT_GRAPH_VERSION = "v26.0"
 REELS_ENDPOINT = "video_reels"
 
 # Max caption/description length (Meta limit for Reels description is 2200,
-# but StoryData schema caps caption at 500. We use the schema limit as
-# our effective max so the truncation is reachable from valid StoryData.)
+# but schema caps caption at 500. We use the schema limit as our effective max.)
 MAX_CAPTION_LENGTH = 500
 
 # Non-transient error subcodes that must NOT be retried:
 #  190 = invalid/expired OAuth token; 200 = permissions; 368 = abusive;
 #  100 = invalid parameter; 613 = rate limit exceeded.
-# These are all deterministic and retrying would just burn quota/requests.
 NON_RETRYABLE_ERROR_CODES = {100, 190, 200, 368, 613}
 
 
@@ -181,23 +186,15 @@ class ReelsPublisher:
     # ------------------------------------------------------------------
     # Caption building
     # ------------------------------------------------------------------
-    def build_caption(self, story: StoryData) -> str:
-        """Build the Reel caption/description from story metadata.
+    def build_caption(self, story: GospelContent) -> str:
+        """Build the Reel caption/description from GospelContent.
 
-        Combines the story caption (or title) with hashtags, capped at
-        ``MAX_CAPTION_LENGTH``.
-
-        Args:
-            story: Story data with caption/title/hashtags.
-
-        Returns:
-            The caption string.
+        Uses the ``facebook_caption`` field (which comes from the same
+        generated source as everything else), with hashtags appended.
         """
         parts: list[str] = []
-        if story.caption.strip():
-            parts.append(story.caption.strip())
-        else:
-            parts.append(story.title.strip())
+        caption_text = (story.facebook_caption or story.hook).strip()
+        parts.append(caption_text)
         tags = " ".join(story.hashtags).strip()
         if tags:
             parts.append(tags)
@@ -218,11 +215,17 @@ class ReelsPublisher:
         """Return the video_reels endpoint URL for this page."""
         return f"{self._graph_url()}/{self.page_id}/{REELS_ENDPOINT}"
 
-    def _error_from_response(self, resp: requests.Response) -> str:
-        """Extract a safe (redacted) error message from an API response.
+    def _comments_url(self, post_id: str) -> str:
+        """Return the comments endpoint URL for a given post.
 
-        Never includes the access token or any secret.
+        Graph API v2.4+ requires the composite ``{page_id}_{post_id}``
+        format to query/mutate Page posts.
         """
+        object_id = post_id if "_" in post_id else f"{self.page_id}_{post_id}"
+        return f"{self._graph_url()}/{object_id}/comments"
+
+    def _error_from_response(self, resp: requests.Response) -> str:
+        """Extract a safe (redacted) error message from an API response."""
         try:
             data = resp.json()
         except ValueError:
@@ -230,7 +233,6 @@ class ReelsPublisher:
         err = data.get("error", {}) if isinstance(data, dict) else {}
         code = err.get("code")
         msg = err.get("message", "")
-        # Redact anything that looks like a token.
         safe_msg = str(msg).replace(
             "OAuth", "OAuth"
         )  # message text is Meta's, no token in it
@@ -270,7 +272,7 @@ class ReelsPublisher:
     def publish(
         self,
         video_path: Path | str,
-        story: StoryData | None = None,
+        story: GospelContent | None = None,
         title: str | None = None,
         description: str | None = None,
     ) -> PublishResult:
@@ -278,7 +280,7 @@ class ReelsPublisher:
 
         Args:
             video_path: Path to the validated MP4.
-            story: Optional story data (used for caption building).
+            story: Optional GospelContent (used for caption building).
             title: Optional explicit Reel title.
             description: Optional explicit description (overrides caption).
 
@@ -300,7 +302,7 @@ class ReelsPublisher:
                 message=(
                     f"[DRY RUN] Would publish Reel on page {self.page_id}: "
                     f"{video.name} "
-                    f"(title: {title or (story.title if story else 'N/A')}, "
+                    f"(title: {title or (story.hook[:100] if story else 'N/A')}, "
                     f"description: {description or 'auto caption'})"
                 ),
             )
@@ -310,7 +312,7 @@ class ReelsPublisher:
         # Build title/description if not provided.
         final_title = (
             title
-            or (story.title if story else "")
+            or (story.hook[:100] if story else "")
             or video.stem[:100]
         ).strip()[:255]
         final_desc = description or (
@@ -332,6 +334,137 @@ class ReelsPublisher:
             )
             raise
 
+    # ------------------------------------------------------------------
+    # Comment posting
+    # ------------------------------------------------------------------
+    def publish_comments(
+        self,
+        post_id: str,
+        first_comment: str,
+        pinned_comment: str,
+    ) -> dict[str, Any]:
+        """Post a first comment and a pinned comment on a published Reel.
+
+        Args:
+            post_id: The post/video ID returned by the FINISH phase.
+                Accepts bare post ID or composite ``{page_id}_{post_id}``.
+            first_comment: Text of the first comment (always posted).
+            pinned_comment: Text of the comment to pin (posted then pinned).
+
+        Returns:
+            Dict with:
+            - first_comment_id: ID of the posted first comment (or empty on failure)
+            - pinned_comment_id: ID of the posted pinned comment (or empty on failure)
+            - pinned: True if the pinned comment was successfully pinned
+
+        Notes:
+            Pinning requires ``pages_manage_engagement`` permission. If the
+            pin fails (permission missing), both comments remain posted and
+            the failure is logged. The pipeline never fails due to a comment
+            error.
+        """
+        result: dict[str, Any] = {
+            "first_comment_id": "",
+            "pinned_comment_id": "",
+            "pinned": False,
+        }
+
+        if self.dry_run:
+            logger.info("Comment posting skipped (dry run)")
+            return result
+
+        # Post first comment
+        try:
+            comment_id = self._post_comment(post_id, first_comment)
+            result["first_comment_id"] = comment_id
+            logger.info(f"First comment posted: id={comment_id}")
+        except FacebookPublishError as e:
+            logger.warning(f"First comment posting failed (non-fatal): {e}")
+
+        # Post pinned comment
+        pinned_comment_id = ""
+        try:
+            pinned_comment_id = self._post_comment(post_id, pinned_comment)
+            result["pinned_comment_id"] = pinned_comment_id
+            logger.info(f"Pinned comment posted: id={pinned_comment_id}")
+        except FacebookPublishError as e:
+            logger.warning(f"Pinned comment posting failed (non-fatal): {e}")
+
+        # Pin the comment (requires pages_manage_engagement)
+        if pinned_comment_id:
+            try:
+                self._pin_comment(pinned_comment_id)
+                result["pinned"] = True
+                logger.info(f"Comment pinned: id={pinned_comment_id}")
+            except FacebookPublishError as e:
+                logger.warning(
+                    f"Comment pinning failed (non-fatal; check pages_manage_engagement permission): {e}"
+                )
+
+        return result
+
+    def _post_comment(self, post_id: str, text: str) -> str:
+        """Post a comment on a post. Returns the comment ID.
+
+        Args:
+            post_id: Bare post ID or composite ``{page_id}_{post_id}``.
+            text: Comment body.
+
+        Returns:
+            The posted comment's ID.
+
+        Raises:
+            FacebookPublishError: On API failure.
+        """
+        url = self._comments_url(post_id)
+        params = {"message": text, "access_token": self.access_token}
+
+        def attempt() -> str:
+            resp = self.session.post(url, params=params, timeout=self.timeout)
+            if resp.status_code not in (200, 201):
+                raise self._classify_error(resp)
+            data = self._parse_json(resp)
+            comment_id = str(data.get("id", ""))
+            if not comment_id:
+                raise FacebookPublishError(
+                    f"Comment POST did not return an id: {data}"
+                )
+            return comment_id
+
+        return self._retry_transient(attempt, context="post comment")
+
+    def _pin_comment(self, comment_id: str) -> None:
+        """Pin a comment by setting its ``comment_privacy`` field.
+
+        Requires ``pages_manage_engagement`` on the Page access token.
+
+        Args:
+            comment_id: The ID of the comment to pin.
+
+        Raises:
+            FacebookPublishError: On API failure (e.g. missing permission).
+        """
+        # Pinning is done via POST /{comment_id}?pin=true (Graph API v2.6+).
+        # When pinning by comment ID, the endpoint is a direct comment
+        # object update, not nested under the post.
+        url = f"{self._graph_url()}/{comment_id}"
+        params = {"pin": "true", "access_token": self.access_token}
+
+        def attempt() -> None:
+            resp = self.session.post(url, params=params, timeout=self.timeout)
+            if resp.status_code != 200:
+                raise self._classify_error(resp)
+            data = self._parse_json(resp)
+            if not data.get("success", True):
+                raise FacebookPublishError(
+                    f"Pin comment returned success=false: {data}"
+                )
+
+        self._retry_transient(attempt, context="pin comment")
+
+    # ------------------------------------------------------------------
+    # Upload steps
+    # ------------------------------------------------------------------
     def _start_upload(self) -> tuple[str, str]:
         """Step 1: request an upload session; return (video_id, upload_url)."""
         url = self._reels_url()
@@ -359,12 +492,7 @@ class ReelsPublisher:
         return video_id, upload_url
 
     def _upload_binary(self, upload_url: str, video: Path) -> None:
-        """Step 2: upload the video binary to the rupload URL.
-
-        Meta's Reels resumable upload requires a POST (not PUT) to the
-        upload_url returned by the START phase, with raw bytes and
-        offset/file_size headers.
-        """
+        """Step 2: upload the video binary to the rupload URL."""
         size = video.stat().st_size
 
         def attempt() -> bytes:
@@ -421,17 +549,12 @@ class ReelsPublisher:
             )
 
         # Verify the Reel is actually publicly accessible.
-        # The FINISH response may return success even if the Reel
-        # is not yet visible to non-admins (Reels-specific behavior).
         verification = self._verify_public_reel(post_id)
         if not verification.is_public:
             logger.warning(
                 f"Reel {post_id} created but may not be publicly accessible: "
                 f"{verification.reason}"
             )
-            # Don't fail the pipeline — log and continue. The Reel may become
-            # public shortly after creation, or the verification may be
-            # conservative. The post_id is returned for manual follow-up.
 
         logger.info(f"Reel published: post_id={post_id}")
         return PublishResult(
@@ -442,16 +565,7 @@ class ReelsPublisher:
         )
 
     def _verify_public_reel(self, post_id: str) -> ReelVerification:
-        """Check if a published Reel is accessible to non-admins.
-
-        Makes a Graph API call to fetch the post's published status and
-        permalink. Returns a ReelVerification with the result.
-
-        Graph API v2.4+ requires the composite ``{page_id}_{post_id}``
-        format to query a Page post; a bare post ID routes to the
-        deprecated singular-statuses endpoint and returns error 12.
-        """
-        # Some endpoints return the full composite ID; avoid double-prefixing.
+        """Check if a published Reel is accessible to non-admins."""
         object_id = post_id if "_" in post_id else f"{self.page_id}_{post_id}"
         url = f"{self._graph_url()}/{object_id}"
         params = {
@@ -477,14 +591,12 @@ class ReelsPublisher:
             permalink = data.get("permalink_url", "")
             privacy = data.get("privacy", {})
 
-            # If explicitly not published, it's not public.
             if not is_published:
                 return ReelVerification(
                     is_public=False,
                     reason="is_published=false",
                 )
 
-            # If privacy restricts visibility (e.g., custom, friends), not public.
             privacy_value = privacy.get("value", "") if isinstance(privacy, dict) else ""
             if privacy_value and privacy_value != "EVERYONE":
                 return ReelVerification(
@@ -492,8 +604,6 @@ class ReelsPublisher:
                     reason=f"privacy={privacy_value}",
                 )
 
-            # If we got a permalink and it's published with no privacy
-            # restriction, consider it public.
             if permalink and is_published:
                 return ReelVerification(
                     is_public=True,
@@ -501,7 +611,6 @@ class ReelsPublisher:
                     permalink=permalink,
                 )
 
-            # Ambiguous — treat as not verified public.
             return ReelVerification(
                 is_public=False,
                 reason="missing permalink or ambiguous response",
@@ -532,20 +641,7 @@ class ReelsPublisher:
         fn,
         context: str,
     ) -> Any:
-        """Run fn with bounded retries on transient failures only.
-
-        Args:
-            fn: Callable returning the parsed response dict (may raise
-                FacebookPublishError).
-            context: Log context label.
-
-        Returns:
-            The return value of fn.
-
-        Raises:
-            FacebookPublishError: After exhausting retries, or immediately
-                for non-retryable errors.
-        """
+        """Run fn with bounded retries on transient failures only."""
         attempt = 0
         while True:
             try:
@@ -563,7 +659,7 @@ class ReelsPublisher:
                         f"{context} failed after {self.retry_count} retries: {e}",
                         retryable=True,
                     ) from e
-                delay = min(2 ** attempt, 30)  # bounded exponential backoff
+                delay = min(2 ** attempt, 30)
                 logger.warning(
                     f"{context}: transient failure (attempt {attempt}/{self.retry_count}); "
                     f"retrying in {delay}s: {e}"

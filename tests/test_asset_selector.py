@@ -275,6 +275,61 @@ class TestAssetSelectorUtilities:
         assert "Missing asset" in errors[0]
 
 
+class TestAssetSelectorGospelAmbient:
+    """Test gospel background + ambient track selection."""
+
+    @pytest.fixture
+    def gospel_dir(self):
+        """Assets dir with a gospel subfolder + an ambient sibling dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            gospel = base / "gospel"
+            gospel.mkdir()
+            for i in range(3):
+                (gospel / f"gospel-00{i}.webp").write_bytes(b"fake image")
+            ambient_dir = base / "ambient"
+            ambient_dir.mkdir()
+            (ambient_dir / "hillsong.wav").write_bytes(b"fake audio")
+            (ambient_dir / "other.mp3").write_bytes(b"fake audio")
+            yield base, gospel, ambient_dir
+
+    def test_list_backgrounds_prefers_gospel(self, gospel_dir):
+        base, gospel, _ = gospel_dir
+        sel = AssetSelector(assets_dir=base)
+        bgs = sel.list_backgrounds(prefer_gospel=True)
+        assert len(bgs) == 3
+        assert all("gospel" in str(a.path) for a in bgs)
+
+    def test_select_background_returns_asset(self, gospel_dir):
+        base, gospel, _ = gospel_dir
+        sel = AssetSelector(assets_dir=base, random_background=False)
+        bg = sel.select_background(prefer_gospel=True)
+        assert bg is not None
+        assert bg.path.exists()
+
+    def test_select_background_none_when_empty(self, empty_assets_dir):
+        sel = AssetSelector(assets_dir=empty_assets_dir)
+        assert sel.select_background() is None
+
+    def test_list_ambient_finds_audio(self, gospel_dir):
+        base, _, ambient_dir = gospel_dir
+        sel = AssetSelector(assets_dir=base, ambient_dir=ambient_dir)
+        tracks = sel.list_ambient()
+        assert len(tracks) == 2
+        assert all(".wav" in a.path.suffix or ".mp3" in a.path.suffix for a in tracks)
+
+    def test_select_ambient_returns_track(self, gospel_dir):
+        base, _, ambient_dir = gospel_dir
+        sel = AssetSelector(assets_dir=base, ambient_dir=ambient_dir)
+        track = sel.select_ambient()
+        assert track is not None
+        assert track.path.exists()
+
+    def test_select_ambient_none_when_missing(self, empty_assets_dir):
+        sel = AssetSelector(assets_dir=empty_assets_dir, ambient_dir=empty_assets_dir)
+        assert sel.select_ambient() is None
+
+
 class TestAssetSelectorFactory:
     """Test factory function."""
     

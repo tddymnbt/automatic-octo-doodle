@@ -255,27 +255,6 @@ class TestVerify:
                 svc.verify(tmp_path / "v.mp4")
 
 
-class TestRender:
-    """Test render delegates to VideoRenderer."""
-
-    def test_render_delegates(self, tmp_path):
-        """render() should delegate to the wrapped renderer."""
-        renderer = MagicMock()
-        renderer.render.return_value = tmp_path / "out.mp4"
-        svc = MediaService(scripts_dir=SCRIPTS_DIR, renderer=renderer)
-        story = MagicMock()
-        assets = []
-        audio = tmp_path / "n.wav"
-        subs = tmp_path / "s.srt"
-        out = tmp_path / "out.mp4"
-        result = svc.render(story=story, assets=assets, narration_audio=audio, subtitle_file=subs, output_path=out)
-        assert result == tmp_path / "out.mp4"
-        renderer.render.assert_called_once_with(
-            story=story, assets=assets, narration_audio=audio,
-            subtitle_file=subs, output_path=out, ambient_audio=None, ambient_volume=0.1,
-        )
-
-
 class TestResultShape:
     """Test MediaVerificationResult."""
 

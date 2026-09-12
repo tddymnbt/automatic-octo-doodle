@@ -20,6 +20,12 @@ class AssetCategory(str, Enum):
     NIGHT = "night"
     WINDOW = "window"
     STREET = "street"
+    GOSPEL = "gospel"
+    SUNRISE = "sunrise"
+    MOUNTAINS = "mountains"
+    GARDEN = "garden"
+    CHURCH = "church"
+    NATURE = "nature"
     
     @classmethod
     def from_string(cls, value: str) -> AssetCategory:

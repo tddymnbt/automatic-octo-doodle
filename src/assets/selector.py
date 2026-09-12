@@ -20,6 +20,10 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
 ALL_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
+# Audio extensions for ambient tracks
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".aac", ".m4a", ".ogg"}
+ALL_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS
+
 
 class AssetSelector:
     """Selects visual assets based on story scene requirements.
@@ -35,15 +39,23 @@ class AssetSelector:
         self,
         assets_dir: Path | str | None = None,
         max_assets_per_category: int = 10,
+        ambient_dir: Path | str | None = None,
+        random_background: bool = True,
     ) -> None:
         """Initialize the asset selector.
         
         Args:
             assets_dir: Path to assets directory (default: from settings)
             max_assets_per_category: Max assets to load per category
+            ambient_dir: Optional path to ambient audio dir (default: derived
+                as <assets_dir>/../ambient, or from settings)
+            random_background: If True, pick a random background each run for
+                variety; if False, pick the first (deterministic).
         """
         self._assets_dir = Path(assets_dir) if assets_dir else settings.assets_dir
         self._max_per_category = max_assets_per_category
+        self._ambient_dir_override = Path(ambient_dir) if ambient_dir else None
+        self._random_background = random_background
         self._cache: dict[AssetCategory, list[Asset]] = {}
         
         logger.info(f"Asset selector initialized: {self._assets_dir}")
@@ -228,6 +240,88 @@ class AssetSelector:
     def _count_total_assets(self) -> int:
         """Count total available assets across all categories."""
         return sum(len(assets) for assets in self._cache.values())
+
+    # ------------------------------------------------------------------
+    # GOSPEL / BACKGROUND + AMBIENT SELECTION
+    # ------------------------------------------------------------------
+    def list_backgrounds(self, prefer_gospel: bool = True) -> list[Asset]:
+        """Return available background assets, preferring the gospel folder.
+
+        Batch-scans all category folders (and the gospel folder when present),
+        dedupes, and returns them so callers can pick one deterministically.
+
+        Args:
+            prefer_gospel: If True, backgrounds under a 'gospel' folder are
+                listed first (they're the curated Gospel set).
+        """
+        if not self._cache:
+            self.scan_assets()
+
+        all_bg: list[Asset] = []
+        seen: set[Path] = set()
+        for assets in self._cache.values():
+            for a in assets:
+                if a.path not in seen:
+                    seen.add(a.path)
+                    all_bg.append(a)
+
+        if prefer_gospel:
+            gospel = [a for a in all_bg if "gospel" in str(a.path).lower()]
+            others = [a for a in all_bg if "gospel" not in str(a.path).lower()]
+            all_bg = gospel + others
+
+        return all_bg
+
+    def list_ambient(self) -> list[Asset]:
+        """Return available ambient audio tracks (from the ambient dir)."""
+        ambient_dir = self._ambient_dir()
+        found: list[Asset] = []
+        if not ambient_dir.is_dir():
+            logger.warning(f"Ambient dir not found: {ambient_dir}")
+            return found
+        for f in sorted(ambient_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in ALL_AUDIO_EXTENSIONS:
+                found.append(Asset(
+                    path=f, category=AssetCategory.FOREST, filename=f.name,
+                ))
+        logger.info(f"Found {len(found)} ambient tracks in {ambient_dir}")
+        return found
+
+    def _ambient_dir(self) -> Path:
+        return (
+            self._ambient_dir_override
+            if self._ambient_dir_override is not None
+            else settings.ambient_dir
+        )
+
+    def select_background(self, prefer_gospel: bool = True) -> Asset | None:
+        """Pick a single background for the video (random, deterministic seed ok).
+
+        If no backgrounds are found, returns None (caller falls back to black).
+        """
+        bgs = self.list_backgrounds(prefer_gospel=prefer_gospel)
+        if not bgs:
+            logger.warning("No backgrounds available; will use black background")
+            return None
+        if self._random_background:
+            picked = random.choice(bgs)
+        else:
+            picked = bgs[0]
+        logger.info(f"Selected background: {picked}")
+        return picked
+
+    def select_ambient(self) -> Asset | None:
+        """Pick a single ambient track deterministically (first by name).
+
+        If no ambient tracks exist, returns None (caller renders narration-only).
+        """
+        tracks = self.list_ambient()
+        if not tracks:
+            logger.warning("No ambient tracks available; rendering narration-only")
+            return None
+        picked = tracks[0]
+        logger.info(f"Selected ambient: {picked}")
+        return picked
     
     def get_available_categories(self) -> list[AssetCategory]:
         """Get list of categories with available assets.
@@ -269,13 +363,18 @@ class AssetSelector:
 
 def create_asset_selector(
     assets_dir: Path | str | None = None,
+    ambient_dir: Path | str | None = None,
+    random_background: bool = True,
 ) -> AssetSelector:
     """Factory function to create an asset selector.
-    
+
     Args:
         assets_dir: Optional path to assets directory
-        
-    Returns:
-        AssetSelector instance
+        ambient_dir: Optional ambient audio directory
+        random_background: Randomize background selection (default True)
     """
-    return AssetSelector(assets_dir=assets_dir)
+    return AssetSelector(
+        assets_dir=assets_dir,
+        ambient_dir=ambient_dir,
+        random_background=random_background,
+    )

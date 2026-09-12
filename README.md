@@ -29,11 +29,12 @@ Pipeline:
   Gemini 3.5 Flash-Lite → Story + metadata
   Kokoro TTS (offline)   → Narration WAV
   Audio validation gate  → reject silent/broken audio
-  Asset selection        → Ken Burns visuals
-  Subtitle generation    → SRT
+  Asset selection        → gospel background (webp) + ambient piano (wav)
+  Subtitle generation    → ASS (speech-aligned, middle-centered)
   MediaService + FFmpeg  → Render 1080×1920 H.264/AAC MP4
+                           (pre-scaled bg + Ken Burns zoompan)
   MediaService verify    → ffmpeg-skill reels compliance check
-  Meta Graph API         → Publish Reel
+  Meta Graph API         → Publish Reel + first comment + pin
 ```
 
 ## Media Pipeline (ffmpeg-skill)
@@ -46,6 +47,19 @@ The rendering layer uses a vendored copy of [kajisho5/ffmpeg-skill](https://gith
 - **`look.py`** — contact sheets for visual QA (development only)
 
 All scripts are vendored under `media/scripts/` (MIT, no runtime npm/node required). Composition remains in `src/video/ffmpeg.py`; the `MediaService` wrapper at `src/video/media_service.py` is the single application boundary for probe → render → verify.
+
+## Video Rendering (Ken Burns)
+
+The renderer in `src/video/ffmpeg.py` produces a 1080×1920 H.264/AAC MP4 at 30fps with:
+
+- **Background** — a selectable gospel WebP image, or a pure black base when none is present. The background is **pre-scaled and center-cropped once** to a 1080×1920 cover, then fed through `zoompan` for a **slow Ken Burns push-in** across the full clip (`d = narration frames`). Subtitles are burned **after** the zoom so text stays crisp and upright.
+- **Ambient** — a random ambient piano WAV mixed low (15%), faded in/out, and ducked under the narration via sidechain compression when enabled.
+- **Reverb** — an optional `aecho` church/chapel hall on the narration (`REVERB_ENABLED`).
+
+Why Ken Burns + pre-scale matters for both performance and distribution:
+
+- **Performance:** the previous implementation re-ran `scale+crop` on the background **every frame**, which is CPU-heavy. On GitHub Actions' 2-vCPU runner it pushed render past the 15-minute FFmpeg timeout. Pre-scaling once and letting `zoompan` expand the single frame is roughly a **7× speedup** (≈53s → ≈7-19s locally), comfortably under CI limits.
+- **Distribution:** a motionless background reads to Facebook as "a static image with audio," which gets limited Reels reach. The slow zoom gives genuine video motion, so the Reel is treated as real video.
 
 ## Facebook Publisher
 
@@ -84,49 +98,63 @@ History recording is non-fatal: if the history file can't be written, the pipeli
 
 Two GitHub Actions workflows:
 
-- **`.github/workflows/daily.yml`** — the production pipeline. Triggers via `workflow_dispatch`, `repository_dispatch` (for cron-job.org), and a daily `schedule`. Runs the full pipeline (story → TTS → audio gate → assets → subtitles → render → verify → publish → history), then persists run history back to the repo. `concurrency` prevents overlapping runs; `DRY_RUN` maps from the `dry_run` dispatch input.
+- **`.github/workflows/daily.yml`** — the production pipeline. Triggers via `workflow_dispatch` (Actions UI) and `repository_dispatch` (cron-job.org). There is **no built-in `schedule`** — cron-job.org is the sole scheduler, so it stays fast and avoids a stray 6th run. Runs the full pipeline (story → TTS → audio gate → assets → subtitles → render → verify → publish → history), then persists run history back to the repo. `concurrency: asmr-pipeline` prevents overlapping runs; `SLOT` comes from the dispatch input/`client_payload.slot` and drives voice cycling.
 - **`.github/workflows/ci.yml`** — runs on every push/PR: `pytest` + `ruff check src tests scripts` + config validation (no secrets required).
 
 `ruff.toml` encodes the project's lint conventions (bare `except Exception` phase handlers, deliberate `subprocess.run` without `check` in tests, etc.).
 
 ## Scheduling with cron-job.org
 
-The pipeline runs with your PC **off** via GitHub Actions + a free [cron-job.org](https://cron-job.org) scheduled trigger. cron-job.org fires a `repository_dispatch` event; GitHub runs the workflow.
+The pipeline runs with your PC **off** via GitHub Actions + a free [cron-job.org](https://cron-job.org) scheduled trigger. cron-job.org fires a `repository_dispatch` event; GitHub runs the workflow. There are **five daily publishing slots** (7am, 11am, 3pm, 7pm, 11pm local, UTC+8), each a separate cron-job.org job that posts a distinct `slot`.
+
+> **Live by default:** a `repository_dispatch` event has **no `dry_run` input**. The workflow's `DRY_RUN` reads `inputs.dry_run` (Actions UI form only), so **every cron-job.org dispatch runs LIVE and publishes a real Reel.** To test the render without publishing, use the Actions UI **Run workflow** with `dry_run: true` (+ optionally `upload_artifact: true` to download the MP4).
 
 ### 1. Create a GitHub PAT (one-time)
 
 - GitHub → Settings → Developer settings → **Personal access tokens**
-- **Fine-grained** (recommended): repo access to this repository, **Contents: read and write**
-- Or **classic** token with the `repo` scope
-- Store it in your password manager — **never commit it**
+- **Fine-grained** (recommended): repo access to this repository, **Actions: read and write** (repository_dispatch requires Actions permission — `Contents: write` alone is **not** sufficient).
+- Or **classic** token with the `repo` scope.
+- Store it in your password manager — **never commit it**. This PAT lives inside cron-job.org, not in GitHub.
 
-### 2. Create the cron job (web console, ~2 minutes)
+### 2. Create five cron jobs (web console, ~2 minutes each)
+
+For **each** of the 5 slots (only the schedule time and `client_payload.slot` differ):
 
 1. Sign up / log in at [cron-job.org](https://cron-job.org)
-2. **Create job** → name it e.g. `ASMR pipeline daily`
-3. **URL:** `https://api.github.com/repos/<owner>/<repo>/dispatches`
+2. **Create job** → name it e.g. `ASMR Slot 1 (7am)`
+3. **URL:** `https://api.github.com/repos/tddymnbt/automatic-octo-doodle/dispatches`
 4. **Request method:** `POST`
-5. **Headers:**
+5. **Authorization:** use cron-job.org's **HTTP Authorization** field → type **Bearer** → value = your PAT (a plain `Authorization` request header may be stripped). Ensure `Content-Type: application/json`. **Headers:**
    | Header | Value |
    |---|---|
-   | `Authorization` | `Bearer <your-GITHUB_PAT>` |
    | `Accept` | `application/vnd.github+json` |
-   | `Content-Type` | `application/json` |
    | `X-GitHub-Api-Version` | `2022-11-28` |
-6. **Request body:**
+6. **Request body:** carry the slot in `client_payload`:
    ```json
-   {"event_type": "trigger-pipeline"}
+   {"event_type":"trigger-pipeline","client_payload":{"slot":"1"}}
    ```
-7. **Execution schedule:** daily at your preferred time (e.g. `00:12` UTC; the repo's built-in `0 12 * * *` schedule remains a secondary fallback)
-8. Save. cron-job.org now fires the pipeline daily.
+7. **Execution schedule:** daily at the slot's local (UTC+8) time:
+   | Slot | UTC+8 time | `client_payload.slot` |
+   |------|-----------|----------------------|
+   | 1 | 07:00 | `"1"` |
+   | 2 | 11:00 | `"2"` |
+   | 3 | 15:00 | `"3"` |
+   | 4 | 19:00 | `"4"` |
+   | 5 | 23:00 | `"5"` |
+8. Save. cron-job.org now fires the pipeline at each slot.
 
-> The `repository_dispatch` event only triggers workflows committed to the **default branch**. The workflow's `concurrency: asmr-pipeline` guard means even if cron-job.org and GitHub's own schedule fire together, only one pipeline runs.
+Why the body carries **only `slot`**: `dry_run` and `upload_artifact` in `client_payload` are **ignored** by the workflow (both read `inputs.*`, which repository_dispatch lacks). A dispatch always publishes live; artifact upload only happens when you set it in the Actions UI.
+
+> cron-job.org's 30s request timeout does **not** affect the pipeline: the dispatch POST returns HTTP 204 almost instantly and GitHub runs the workflow asynchronously on its own runner (FFmpeg timeout 15 min, job timeout 6h). A `403 Forbidden` from GitHub means the request reached GitHub but was rejected for auth reasons — check the PAT's Actions/repo scope and how cron-job.org sends the Bearer token.
+
+> The `repository_dispatch` event only triggers workflows committed to the **default branch**. The workflow's `concurrency: asmr-pipeline` guard means even if two slots fire close together, only one pipeline runs (5 slots → 5 publishes/day).
 
 ### Manual trigger (also useful for testing)
 
 ```bash
 python scripts/trigger_pipeline.py --repo owner/repo --token "$GITHUB_PAT"
-# Optional: --payload '{"dry_run": true}' for a dry-run publish
+# Optional: --payload '{"slot": "1", "dry_run": true}' — NOTE: dry_run in the
+# payload is not consumed by the workflow; this always fires a live publish.
 ```
 
 The script is stdlib-only, prints `✓ Repository dispatch sent...` on success (HTTP 204), and **never prints or logs the token**.
@@ -289,12 +317,11 @@ Check the **Actions** tab — the CI workflow should show ✓ on `main`.
 
 ### 4. First live run (manual, dry-run → live)
 ```bash
-# Via GitHub CLI (if installed)
-gh workflow run daily.yml -f dry_run=true
+# Dry-run first (via Actions UI: dry_run=true, upload_artifact=true to see the MP4)
+#   GitHub → Actions → Daily ASMR Story Reel → Run workflow
 
-# Or via cron-job.org (see README § Scheduling)
-# Or trigger manually:
-python scripts/trigger_pipeline.py --repo owner/repo --token "$GITHUB_PAT"
+# Live test via GitHub CLI (if installed)
+gh workflow run daily.yml
 ```
 
 ### 5. Verify the Reel appeared on your Facebook Page
@@ -314,7 +341,7 @@ Follow the steps in **Scheduling with cron-job.org** above to automate daily run
 - espeak-ng (installed by workflow; needed for Kokoro TTS)
 - Google AI Studio account + API key (free tier)
 - Facebook Page with `pages_read_engagement` + `pages_manage_posts` permissions
-- GitHub PAT (for cron-job.org; classic `repo` scope or fine-grained with Contents: write)
+- GitHub PAT (for cron-job.org; classic `repo` scope or fine-grained with **Actions: read and write** — this is what the 403 error indicates if mis-scoped)
 
 ## License
 

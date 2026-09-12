@@ -336,8 +336,9 @@ class VideoRenderer:
                 # Video background: loop to cover narration
                 cmd += ["-stream_loop", "-1", "-i", str(bg)]
             else:
-                # Still image background: loop as an infinite video stream
-                cmd += ["-loop", "1", "-i", str(bg)]
+                # Still image background: feed a single frame; zoompan (Ken Burns)
+                # expands it into a slowly-zooming video stream.
+                cmd += ["-i", str(bg)]
         else:
             cmd += [
                 "-f", "lavfi",
@@ -383,14 +384,23 @@ class VideoRenderer:
             fc.append("[1:a]aresample=48000[a]")
 
         # ---- Video filtergraph ----
+        # Subtitles (vf) are burned AFTER zoompan so the text stays crisp and
+        # upright while the background zooms underneath.
         if use_background:
-            v0 = (
-                f"[0:v]scale={self.width}:{self.height}:force_original_aspect_ratio=increase,"
-                f"crop={self.width}:{self.height},"
+            # Ken Burns: zoom from the still image into a gentle push-in.
+            # Pre-scale+crop to a 1080x1920 cover, then zoompan with d=<total
+            # frames> so the zoom spans the whole clip (single-frame input +
+            # d=1 yields only 1 frame). fps set twice (zoompan needs fps).
+            bg_total_frames = max(1, int(self._probe_duration(Path(audio_wav)) * self.fps) + 30)
+            fc.append(
+                f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920,"
+                f"zoompan=z='min(zoom+0.0006,1.08)':x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)':d={bg_total_frames}:s=1080x1920:fps={self.fps},"
+                f"{vf},format=yuv420p[v]"
             )
         else:
-            v0 = "[0:v]"
-        fc.append(f"{v0}{vf},format=yuv420p[v]")
+            fc.append(f"[0:v]{vf},format=yuv420p[v]")
 
         cmd += ["-filter_complex", ";".join(fc)]
 

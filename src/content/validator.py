@@ -214,17 +214,11 @@ class GospelValidator:
     def _validate_content_safety(self, content: GospelContent, result: ValidationResult) -> None:
         """Basic content safety and theological checks."""
         # Check for unsafe patterns in all text fields
-        full_text = " ".join([
-            content.situation_summary,
-            content.hook,
-            content.biblical_message,
-            content.reflection,
-            content.closing_cta,
-            content.narration_script,
-            content.facebook_caption,
-            content.first_comment,
-            content.pinned_comment,
-        ]).lower()
+        full_text = (
+            f"{content.situation_summary} {content.hook} {content.biblical_message} "
+            f"{content.reflection} {content.closing_cta} {content.narration_script} "
+            f"{content.facebook_caption} {content.first_comment} {content.pinned_comment}"
+        ).lower()
 
         for pattern in self.UNSAFE_PATTERNS:
             if re.search(pattern, full_text, re.IGNORECASE):

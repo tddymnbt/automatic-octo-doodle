@@ -294,14 +294,14 @@ class TestAssetSelectorGospelAmbient:
             yield base, gospel, ambient_dir
 
     def test_list_backgrounds_prefers_gospel(self, gospel_dir):
-        base, gospel, _ = gospel_dir
+        base, _, _ = gospel_dir
         sel = AssetSelector(assets_dir=base)
         bgs = sel.list_backgrounds(prefer_gospel=True)
         assert len(bgs) == 3
         assert all("gospel" in str(a.path) for a in bgs)
 
     def test_select_background_returns_asset(self, gospel_dir):
-        base, gospel, _ = gospel_dir
+        base, _, _ = gospel_dir
         sel = AssetSelector(assets_dir=base, random_background=False)
         bg = sel.select_background(prefer_gospel=True)
         assert bg is not None

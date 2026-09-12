@@ -5,9 +5,9 @@ from src.assets.models import Asset, AssetCategory
 from src.assets.selector import AssetSelector
 
 __all__ = [
+    "AmbientSelector",
     "Asset",
     "AssetCategory",
     "AssetSelector",
-    "AmbientSelector",
     "create_ambient_selector",
 ]

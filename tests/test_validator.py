@@ -3,7 +3,7 @@
 import pytest
 
 from src.content.schema import GospelContent
-from src.content.validator import GospelValidator, ValidationResult
+from src.content.validator import GospelValidator
 
 
 def make_content(**overrides) -> GospelContent:

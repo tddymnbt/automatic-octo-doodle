@@ -8,20 +8,20 @@ from src.content.schema import ContentHistoryEntry, GospelContent
 
 def _make_content(**overrides) -> GospelContent:  # type: ignore[no-untyped-def]
     """Helper: build GospelContent with fields meeting all min_length constraints."""
-    defaults = dict(
-        situation_summary="overwhelmed by financial pressure and uncertainty",
-        hook="Maybe you're doing everything you can, but nothing seems to be getting better.",
-        biblical_message="But Scripture reminds us that we don't have to carry every burden alone. God invites us to cast our cares on Him.",
-        scripture_reference="Matthew 11:28",
-        scripture_text="Come to me, all who labor and are heavy laden, and I will give you rest.",
-        reflection="When finances feel impossible, remember that God sees your struggle and offers peace that surpasses understanding.",
-        closing_cta="Can I get an Amen in the comments below?",
-        narration_script="Maybe you're doing everything you can, but nothing seems to be getting better. But Scripture reminds us that we don't have to carry every burden alone. God invites us to cast our cares on Him. Come to me, all who labor and are heavy laden, and I will give you rest. When finances feel impossible, remember that God sees your struggle and offers peace that surpasses understanding. Can I get an Amen in the comments?",
-        facebook_caption="Maybe you're doing everything you can, but nothing seems to be getting better.\n\nBut Scripture reminds us that we don't have to carry every burden alone.\n\n📖 Matthew 11:28\n\nWhen finances feel impossible, remember that God sees your struggle and offers peace.\n\nCan I get an Amen?",
-        first_comment="What's weighing on your heart today? Share below.",
-        pinned_comment="Praying for everyone in the comments. You're not alone in this.",
-        hashtags=["#DailyBread", "#Gospel", "#Faith", "#Encouragement", "#BibleVerse"],
-    )
+    defaults = {
+        "situation_summary": "overwhelmed by financial pressure and uncertainty",
+        "hook": "Maybe you're doing everything you can, but nothing seems to be getting better.",
+        "biblical_message": "But Scripture reminds us that we don't have to carry every burden alone. God invites us to cast our cares on Him.",
+        "scripture_reference": "Matthew 11:28",
+        "scripture_text": "Come to me, all who labor and are heavy laden, and I will give you rest.",
+        "reflection": "When finances feel impossible, remember that God sees your struggle and offers peace that surpasses understanding.",
+        "closing_cta": "Can I get an Amen in the comments below?",
+        "narration_script": "Maybe you're doing everything you can, but nothing seems to be getting better. But Scripture reminds us that we don't have to carry every burden alone. God invites us to cast our cares on Him. Come to me, all who labor and are heavy laden, and I will give you rest. When finances feel impossible, remember that God sees your struggle and offers peace that surpasses understanding. Can I get an Amen in the comments?",
+        "facebook_caption": "Maybe you're doing everything you can, but nothing seems to be getting better.\n\nBut Scripture reminds us that we don't have to carry every burden alone.\n\n📖 Matthew 11:28\n\nWhen finances feel impossible, remember that God sees your struggle and offers peace.\n\nCan I get an Amen?",
+        "first_comment": "What's weighing on your heart today? Share below.",
+        "pinned_comment": "Praying for everyone in the comments. You're not alone in this.",
+        "hashtags": ["#DailyBread", "#Gospel", "#Faith", "#Encouragement", "#BibleVerse"],
+    }
     defaults.update(overrides)
     return GospelContent(**defaults)
 

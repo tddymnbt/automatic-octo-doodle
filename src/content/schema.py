@@ -137,16 +137,16 @@ class GospelContent(BaseModel):
             raise ValueError("Scripture reference cannot be empty")
         # Accept common formats: "John 3:16", "Psalm 23:1-4", "Philippians 4:6-7"
         import re
-        if not re.match(r"^[A-Za-z]+\s+\d+:\d+(?:-\d+)?$", v):
-            # Allow some flexibility for books like "1 John", "2 Timothy"
-            if not re.match(r"^\d?\s*[A-Za-z]+\s+\d+:\d+(?:-\d+)?$", v):
-                raise ValueError(
-                    f"Scripture reference must be in format 'Book Chapter:Verse' or 'Book Chapter:Verse-Verse', got: {v}"
-                )
+        if not re.match(r"^[A-Za-z]+\s+\d+:\d+(?:-\d+)?$", v) and not re.match(
+            r"^\d?\s*[A-Za-z]+\s+\d+:\d+(?:-\d+)?$", v
+        ):
+            raise ValueError(
+                f"Scripture reference must be in format 'Book Chapter:Verse' or 'Book Chapter:Verse-Verse', got: {v}"
+            )
         return v
 
     @model_validator(mode="after")
-    def check_comments_distinct(self) -> "GospelContent":
+    def check_comments_distinct(self) -> GospelContent:
         """first_comment and pinned_comment must be different."""
         if self.first_comment.strip() == self.pinned_comment.strip():
             raise ValueError(

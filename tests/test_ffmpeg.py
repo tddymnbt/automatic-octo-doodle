@@ -230,9 +230,10 @@ class TestValidateVideo:
 
         renderer = VideoRenderer()
 
-        with pytest.raises(FFmpegError, match="No audio stream"):
-            with patch("pathlib.Path.exists", return_value=True):
-                renderer.validate_video(Path("/tmp/video.mp4"))
+        with pytest.raises(FFmpegError, match="No audio stream"), patch(
+            "pathlib.Path.exists", return_value=True
+        ):
+            renderer.validate_video(Path("/tmp/video.mp4"))
 
 
 class TestRenderBackgroundAmbient:
@@ -240,7 +241,7 @@ class TestRenderBackgroundAmbient:
 
     def _renderer(self):
         """Renderer with subtitles available, ffmpeg mocked."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         with patch("src.video.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg"), \
              patch("src.video.ffmpeg.Path.exists", return_value=False):

@@ -17,7 +17,7 @@ from typing import Any
 from src.ai.client import GeminiClient, GeminiClientError
 from src.config import settings
 from src.content.prompts import GospelPrompts
-from src.content.schema import ContentHistoryEntry, GospelContent
+from src.content.schema import GospelContent
 from src.content.validator import GospelValidator, ValidationResult
 
 logger = logging.getLogger(__name__)

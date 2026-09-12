@@ -46,7 +46,7 @@ class SubtitleEntry:
     def to_ass_dialogue(self) -> str:
         """Convert this entry to an ASS Dialogue line (no header)."""
         def _ts(sec: float) -> str:
-            cs = int(round(sec * 100))
+            cs = round(sec * 100)
             h, rem = divmod(cs, 360000)
             m, rem = divmod(rem, 6000)
             s, cs = divmod(rem, 100)
@@ -97,10 +97,12 @@ def entries_to_ass(
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
-        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
-        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
-        "MarginL, MarginR, MarginV, Encoding",
+        (
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+            "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+            "MarginL, MarginR, MarginV, Encoding"
+        ),
         (
             f"Style: Default,{font_name},{font_size},&H00{primary},"
             f"&H00{primary},&H00{outline_color},&H80000000,0,0,0,0,100,100,0,0,"

@@ -53,7 +53,7 @@ env:
   AI_MODEL: gemini-3.5-flash-lite
   TTS_MODEL: gemini-3.1-flash-tts-preview
   TTS_PROVIDER: kokoro
-  KOKORO_VOICE: am_onyx
+  KOKORO_VOICE: am_fenrir
   KOKORO_SPEED: '0.85'
   KOKORO_LANG: a
   REVERB_ENABLED: 'true'
@@ -68,7 +68,7 @@ env:
   MAX_DURATION_SECONDS: '60'
   LOG_LEVEL: INFO
   STORY_LANGUAGE: en
-  CONTENT_STYLE: calm_mysterious_atmospheric
+  CONTENT_STYLE: gospel_daily_bread
   FACEBOOK_RETRY_COUNT: '3'
   MAX_VISUALS_PER_VIDEO: '8'
   ENABLE_AMBIENT_AUDIO: 'true'

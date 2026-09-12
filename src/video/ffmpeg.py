@@ -170,10 +170,10 @@ class VideoRenderer:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10 minute timeout (CI runners are slower)
+                timeout=900,  # 15 minute timeout (CI runners are slow for ASS burn-in)
             )
         except subprocess.TimeoutExpired:
-            raise FFmpegError("FFmpeg timed out after 10 minutes")
+            raise FFmpegError("FFmpeg timed out after 15 minutes")
         except FileNotFoundError:
             raise FFmpegNotFoundError("FFmpeg executable not found")
         

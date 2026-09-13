@@ -1,8 +1,8 @@
-"""Gospel content generator using Gemini AI.
+"""Gospel content generator using Gemini AI (Phase C+: archetype-driven).
 
 This module generates original Daily Bread / Gospel encouragement content
 using the Gemini API. It handles prompt construction, response parsing,
-and validation.
+validation, and diversity-aware generation with rotation across archetypes.
 """
 
 from __future__ import annotations
@@ -10,12 +10,25 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from src.ai.client import GeminiClient, GeminiClientError
 from src.config import settings
+from src.content.diversity import (
+    ARCHETYPE_PRINCIPLES,
+    ARCHETYPES,
+    PRINCIPLES,
+    SLOT_ARCHETYPE_BIAS,
+    SLOT_PRINCIPLE_BIAS,
+    select_caption_style,
+    select_conclusion_pattern,
+    select_cta_pattern,
+    select_opening_pattern,
+    select_with_slot_bias,
+)
 from src.content.prompts import GospelPrompts
 from src.content.schema import GospelContent
 from src.content.validator import GospelValidator, ValidationResult
@@ -39,11 +52,14 @@ class GospelGenerator:
     """Generates Daily Gospel encouragement content using Gemini AI.
 
     This generator:
-    1. Constructs appropriate prompts with anti-repetition context
-    2. Calls Gemini API for content generation
-    3. Parses and validates the response
-    4. Computes content hash for duplicate detection
-    5. Returns structured GospelContent
+    1. Selects an underused content archetype (weighted LSUR)
+    2. Selects a principle/theme within that archetype
+    3. Consults history for recency/coverage to avoid repetition
+    4. Constructs archetype-specific prompts with anti-repetition context
+    5. Calls Gemini API for content generation
+    6. Parses and validates the response
+    7. Computes content hash for duplicate detection
+    8. Returns structured GospelContent
     """
 
     def __init__(
@@ -64,6 +80,8 @@ class GospelGenerator:
             target_duration=settings.target_duration_seconds,
         )
         self._model = settings.ai_model
+        # Seed random for controlled rotation across runs
+        self._rng = random.Random()
 
     def generate(
         self,
@@ -101,7 +119,7 @@ class GospelGenerator:
                     elapsed = int((time.time() - start_time) * 1000)
                     logger.info(
                         f"Gospel content generated successfully in {elapsed}ms: "
-                        f"'{content.hook[:60]}...'"
+                        f"'{content.hook[:60]}...' (archetype={content.archetype})"
                     )
                     return GenerationResult(
                         success=True,
@@ -138,7 +156,7 @@ class GospelGenerator:
         )
 
     def _call_gemini(self, language: str) -> GospelContent:
-        """Call Gemini API to generate Gospel content.
+        """Call Gemini API to generate Gospel content with archetype/rotation logic.
 
         Args:
             language: Content language
@@ -149,35 +167,128 @@ class GospelGenerator:
         Raises:
             GeminiClientError: API call failed
         """
-        # Load recent history for anti-repetition
+        # Load recent history for anti-repetition + rotation context
         recent_entries: list[dict] = []
+        recent_principles: list[str] = []
+        recent_verses: list[str] = []
+        recent_books: list[str] = []
+        recent_openings: list[str] = []
+        recent_conclusions: list[str] = []
+        recent_caption_styles: list[str] = []
+        recent_cta_patterns: list[str] = []
+        history = None
+
         try:
             from src.history.store import HistoryStore
 
             history = HistoryStore()
+            # Last 30 published records for diversity context
             for record in history.load_history():
+                if record.status != "published" or record.dry_run:
+                    continue
                 if record.situation_summary and record.scripture_reference:
                     recent_entries.append({
                         "situation_summary": record.situation_summary,
                         "scripture_reference": record.scripture_reference,
                     })
-            # Keep last 20 to bound prompt size
+                if record.primary_theme:
+                    recent_principles.append(record.primary_theme)
+                if record.scripture_reference:
+                    recent_verses.append(record.scripture_reference)
+                if record.scripture_book:
+                    recent_books.append(record.scripture_book)
+                if record.opening_pattern:
+                    recent_openings.append(record.opening_pattern)
+                if record.conclusion_pattern:
+                    recent_conclusions.append(record.conclusion_pattern)
+                if record.caption_style:
+                    recent_caption_styles.append(record.caption_style)
+                if record.cta_pattern:
+                    recent_cta_patterns.append(record.cta_pattern)
+            # Bound prompt size
             recent_entries = recent_entries[-20:]
+            recent_principles = recent_principles[-10:]
+            recent_verses = recent_verses[-10:]
+            recent_books = recent_books[-10:]
+            recent_openings = recent_openings[-5:]
+            recent_conclusions = recent_conclusions[-5:]
+            recent_caption_styles = recent_caption_styles[-5:]
+            recent_cta_patterns = recent_cta_patterns[-5:]
         except Exception:
-            logger.debug("Could not load history for anti-repetition; continuing without")
+            logger.debug("Could not load history for diversity; continuing without")
 
-        # Build prompt
+        # ---- ARCHETYPE & PRINCIPLE SELECTION (weighted LSUR with slot bias) ----
+        # Pick archetype with slot bias
+        archetype_counts = history.field_counts("archetype") if history else {}
+        slot = settings.slot
+        archetype = select_with_slot_bias(
+            ARCHETYPES,
+            recent_keys=[r.get("archetype", "") for r in recent_entries],
+            counts=archetype_counts,
+            slot=slot,
+            slot_bias=SLOT_ARCHETYPE_BIAS,
+            min_spacing=2,
+            recency_weight=2.0,
+            coverage_weight=0.8,
+            rng=self._rng,
+        )
+
+        # Pick primary theme (principle) within archetype with slot bias
+        principles = ARCHETYPE_PRINCIPLES.get(archetype, PRINCIPLES)
+        theme_counts = history.field_counts("primary_theme") if history else {}
+        primary_theme = select_with_slot_bias(
+            principles,
+            recent_keys=recent_principles,
+            counts=theme_counts,
+            slot=slot,
+            slot_bias=SLOT_PRINCIPLE_BIAS,
+            min_spacing=3,
+            recency_weight=1.5,
+            coverage_weight=1.0,
+            rng=self._rng,
+        )
+
+        # Pick structure patterns (rotation)
+        opening_counts = history.field_counts("opening_pattern") if history else {}
+        opening_pattern = select_opening_pattern(
+            recent_openings, counts=opening_counts, rng=self._rng
+        )
+        conclusion_counts = history.field_counts("conclusion_pattern") if history else {}
+        conclusion_pattern = select_conclusion_pattern(
+            recent_conclusions, counts=conclusion_counts, rng=self._rng
+        )
+        caption_counts = history.field_counts("caption_style") if history else {}
+        caption_style = select_caption_style(
+            recent_caption_styles, counts=caption_counts, rng=self._rng
+        )
+        cta_counts = history.field_counts("cta_pattern") if history else {}
+        cta_pattern = select_cta_pattern(
+            recent_cta_patterns, counts=cta_counts, rng=self._rng
+        )
+
+        # Build user prompt with diversity directives
         user_prompt = GospelPrompts.gospel_prompt(
             language=language,
             target_duration=settings.target_duration_seconds,
             recent_entries=recent_entries or None,
+            archetype=archetype,
+            primary_theme=primary_theme,
+            avoid_principles=recent_principles,
+            avoid_verses=recent_verses,
+            avoid_openings=recent_openings,
+            opening_pattern=opening_pattern,
+            conclusion_pattern=conclusion_pattern,
+            caption_style=caption_style,
+            cta_pattern=cta_pattern,
         )
 
-        # Call API
+        # Call API with archetype-specific system prompt
+        system_instruction = GospelPrompts.ARCHETYPE_SYSTEMS[archetype]
+
         response_text = self._client.generate_json(
             model=self._model,
             contents=user_prompt,
-            system_instruction=GospelPrompts.GOSPEL_SYSTEM,
+            system_instruction=system_instruction,
             temperature=0.8,
             max_output_tokens=3000,
         )
@@ -250,10 +361,32 @@ class GospelGenerator:
             "facebook_caption",
             "first_comment",
             "pinned_comment",
+            "archetype",
+            "primary_theme",
         ]
         for field in required:
             if field not in data or not data[field]:
                 raise ValueError(f"Missing required field: {field}")
+
+        # Ensure secondary_themes is a list
+        secondary_themes = data.get("secondary_themes", [])
+        if isinstance(secondary_themes, str):
+            try:
+                import json
+
+                secondary_themes = json.loads(secondary_themes)
+            except json.JSONDecodeError:
+                secondary_themes = []
+
+        # Ensure key_concepts is a list
+        key_concepts = data.get("key_concepts", [])
+        if isinstance(key_concepts, str):
+            try:
+                import json
+
+                key_concepts = json.loads(key_concepts)
+            except json.JSONDecodeError:
+                key_concepts = []
 
         return GospelContent(
             situation_summary=data["situation_summary"],
@@ -268,6 +401,15 @@ class GospelGenerator:
             first_comment=data["first_comment"],
             pinned_comment=data["pinned_comment"],
             hashtags=data.get("hashtags", ["#DailyBread", "#Gospel", "#Faith", "#Encouragement", "#BibleVerse"]),
+            archetype=data.get("archetype", ""),
+            primary_theme=data.get("primary_theme", ""),
+            secondary_themes=secondary_themes,
+            tone=data.get("tone", ""),
+            opening_pattern=data.get("opening_pattern", ""),
+            conclusion_pattern=data.get("conclusion_pattern", ""),
+            caption_style=data.get("caption_style", ""),
+            cta_pattern=data.get("cta_pattern", ""),
+            key_concepts=key_concepts,
         )
 
     def _compute_hash(self, content: GospelContent) -> str:

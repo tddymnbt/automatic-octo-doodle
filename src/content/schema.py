@@ -114,6 +114,76 @@ class GospelContent(BaseModel):
         description="Hash of content for duplicate detection (set after generation)",
     )
 
+    # === CONTENT-DIVERSITY METADATA (Phase C) ===
+    # These drive archetype/theme/scripture/structure rotation and are
+    # persisted to run history. All default to empty so fully manual
+    # GospelContent construction (tests, legacy callers) keeps working.
+    archetype: str = Field(
+        default="",
+        max_length=40,
+        description="Content archetype (e.g. spiritual_principle, scripture_first)",
+    )
+    primary_theme: str = Field(
+        default="",
+        max_length=80,
+        description="Primary spiritual theme/principle (e.g. gratitude, forgiveness)",
+    )
+    secondary_themes: list[str] = Field(
+        default_factory=list,
+        max_length=8,
+        description="Secondary themes touched by the piece",
+    )
+    tone: str = Field(
+        default="",
+        max_length=40,
+        description="Tone tag (e.g. reflective, exhorting, tender)",
+    )
+    opening_pattern: str = Field(
+        default="",
+        max_length=60,
+        description="Classifier tag for how the piece opens (e.g. reflective_question)",
+    )
+    conclusion_pattern: str = Field(
+        default="",
+        max_length=60,
+        description="Classifier tag for how the piece concludes",
+    )
+    caption_style: str = Field(
+        default="",
+        max_length=60,
+        description="Caption structure tag (e.g. verse_first, question_first)",
+    )
+    cta_pattern: str = Field(
+        default="",
+        max_length=60,
+        description="Call-to-action classifier tag (e.g. comment_share, reflection_prompt)",
+    )
+    key_concepts: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Short keywords summarizing the piece for near-duplicate analysis",
+    )
+
+    # JSON-encoded convenience for history storage (single-line JSONL rows).
+    @property
+    def secondary_themes_json(self) -> str:
+        import json
+
+        return json.dumps(self.secondary_themes)
+
+    @property
+    def key_concepts_json(self) -> str:
+        import json
+
+        return json.dumps(self.key_concepts)
+
+    @property
+    def scripture_book(self) -> str:
+        """Derive the Bible book from scripture_reference (empty if unparsable)."""
+        from src.content.diversity import parse_scripture_book
+
+        return parse_scripture_book(self.scripture_reference)
+
     @field_validator("hashtags")
     @classmethod
     def ensure_hashtag_prefix(cls, v: list[str]) -> list[str]:

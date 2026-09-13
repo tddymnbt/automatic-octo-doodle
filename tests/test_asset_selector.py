@@ -330,9 +330,61 @@ class TestAssetSelectorGospelAmbient:
         assert sel.select_ambient() is None
 
 
+class TestAssetSelectorRotation:
+    """Test LSUR rotation when history is provided."""
+
+    @pytest.fixture
+    def gospel_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            gospel = base / "gospel"
+            gospel.mkdir()
+            for i in range(5):
+                (gospel / f"gospel-{i:02d}.webp").write_bytes(b"fake image")
+            ambient_dir = base / "ambient"
+            ambient_dir.mkdir()
+            for i in range(4):
+                (ambient_dir / f"track-{i}.wav").write_bytes(b"fake audio")
+            yield base, gospel, ambient_dir
+
+    @pytest.fixture
+    def mock_history(self):
+        """Mock HistoryStore with field_sequence/field_counts."""
+        from unittest.mock import MagicMock
+
+        mock = MagicMock()
+        mock.field_sequence.side_effect = lambda field, only_published=False: []
+        mock.field_counts.side_effect = lambda field, only_published=False: {}
+        return mock
+
+    def test_select_background_uses_lsur_with_history(self, gospel_dir, mock_history):
+        base, _, _ = gospel_dir
+        sel = AssetSelector(assets_dir=base, history=mock_history)
+        bg = sel.select_background(prefer_gospel=True)
+        assert bg is not None
+        mock_history.field_sequence.assert_called_with("background_used")
+        mock_history.field_counts.assert_called_with("background_used")
+
+    def test_select_ambient_uses_lsur_with_history(self, gospel_dir, mock_history):
+        base, _, ambient_dir = gospel_dir
+        sel = AssetSelector(assets_dir=base, ambient_dir=ambient_dir, history=mock_history)
+        track = sel.select_ambient()
+        assert track is not None
+        mock_history.field_sequence.assert_called_with("ambient_used")
+        mock_history.field_counts.assert_called_with("ambient_used")
+
+    def test_fallbacks_to_random_when_no_history(self, gospel_dir):
+        base, _, ambient_dir = gospel_dir
+        sel = AssetSelector(assets_dir=base, ambient_dir=ambient_dir, history=None)
+        bg = sel.select_background()
+        track = sel.select_ambient()
+        assert bg is not None
+        assert track is not None
+
+
 class TestAssetSelectorFactory:
     """Test factory function."""
-    
+
     def test_create_selector(self):
         """Factory should create AssetSelector."""
         selector = AssetSelector(assets_dir="/tmp/test")

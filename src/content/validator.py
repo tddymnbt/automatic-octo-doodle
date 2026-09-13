@@ -10,6 +10,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
+from src.content.diversity import max_jaccard
 from src.content.schema import GospelContent
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class GospelValidator:
     4. Content: No unsafe or theologically problematic content
     5. Uniqueness: Content hash for duplicate detection
     6. Consistency: All social media outputs align with core message
+    7. Diversity: Near-duplicate detection vs. history (Phase B+)
     """
 
     # Duration constraints
@@ -278,3 +280,55 @@ class GospelValidator:
     def is_duplicate(self, content: GospelContent, recent_hashes: list[str]) -> bool:
         """Check if content is a duplicate of recent content."""
         return content.content_hash in recent_hashes
+
+    def check_diversity(
+        self,
+        content: GospelContent,
+        history_texts: list[str],
+        history_captions: list[str] | None = None,
+        *,
+        story_threshold: float = 0.58,
+        caption_threshold: float = 0.50,
+        window: int = 30,
+    ) -> ValidationResult:
+        """Check a candidate against recent history for near-duplicates.
+
+        Uses lightweight trigram Jaccard similarity ($0, stdlib-only). A
+        candidate is rejected if its narration is too similar to any recent
+        story text, or its caption too similar to any recent caption.
+
+        Args:
+            content: The candidate GospelContent.
+            history_texts: Recent story texts (narration/hook) from history.
+            history_captions: Recent facebook_captions from history. When
+                None, caption comparison is skipped (caller has no captions
+                recorded yet — e.g. a fresh store).
+            story_threshold: Reject if narration similarity >= this.
+            caption_threshold: Reject if caption similarity >= this.
+            window: Only consider the last ``window`` texts (bounds cost).
+
+        Returns:
+            ValidationResult that is valid unless a near-duplicate is found.
+            Non-fatal: failures are logged but do not raise.
+        """
+        result = ValidationResult()
+        recent = history_texts[-window:] if history_texts else []
+
+        if recent:
+            story_sim = max_jaccard(content.narration_script, recent)
+            if story_sim >= story_threshold:
+                result.add_error(
+                    f"Narration too similar to a recent post (Jaccard {story_sim:.2f} "
+                    f">= {story_threshold}). Regenerate a more distinct phrase/wording."
+                )
+
+        if history_captions:
+            recent_captions = history_captions[-window:]
+            caption_sim = max_jaccard(content.facebook_caption, recent_captions, n=2)
+            if caption_sim >= caption_threshold:
+                result.add_error(
+                    f"Caption too similar to a recent post (Jaccard {caption_sim:.2f} "
+                    f">= {caption_threshold}). Vary the caption structure/wording."
+                )
+
+        return result

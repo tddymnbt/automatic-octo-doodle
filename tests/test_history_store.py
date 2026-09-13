@@ -171,6 +171,132 @@ class TestWasPublished:
         assert store.published_hashes() == ["h1"]
 
 
+class TestDiversityQueries:
+    """Rotation/recency queries on stored records."""
+
+    def test_field_sequence_and_last_used(self, store: HistoryStore):
+        store.record(
+            story_hash="h1", status=STATUS_PUBLISHED, dry_run=False,
+            background_used="gospel-01.webp", scripture_book="Matthew",
+        )
+        store.record(
+            story_hash="h2", status=STATUS_PUBLISHED, dry_run=False,
+            background_used="gospel-02.webp", scripture_book="Psalm",
+        )
+        store.record(
+            story_hash="h3", status=STATUS_PUBLISHED, dry_run=False,
+            background_used="gospel-01.webp", scripture_book="Matthew",
+        )
+        assert store.field_sequence("background_used") == [
+            "gospel-01.webp", "gospel-02.webp", "gospel-01.webp",
+        ]
+        # gospel-01 last used 0 records back (the most recent).
+        assert store.last_used("background_used", "gospel-01.webp") == 0
+        assert store.last_used("background_used", "gospel-02.webp") == 1
+        # never used -> large
+        assert store.last_used("background_used", "never.webp") == 3
+
+    def test_last_used_box_immediate_repeat(self, store: HistoryStore):
+        store.record(
+            story_hash="h1", status=STATUS_PUBLISHED, dry_run=False,
+            ambient_used="piano.wav",
+        )
+        store.record(
+            story_hash="h2", status=STATUS_PUBLISHED, dry_run=False,
+            ambient_used="harp.wav",
+        )
+        assert store.last_used("ambient_used", "piano.wav") == 1  # not adjacent
+        store.record(
+            story_hash="h3", status=STATUS_PUBLISHED, dry_run=False,
+            ambient_used="harp.wav",
+        )
+        assert store.last_used("ambient_used", "harp.wav") == 0  # just used
+        assert store.last_used("ambient_used", "piano.wav") == 2
+
+    def test_field_counts_case_insensitive(self, store: HistoryStore):
+        store.record(
+            story_hash="h1", status=STATUS_PUBLISHED, dry_run=False,
+            scripture_book="Psalm",
+        )
+        store.record(
+            story_hash="h2", status=STATUS_PUBLISHED, dry_run=False,
+            scripture_book="psalm",
+        )
+        store.record(
+            story_hash="h3", status=STATUS_PUBLISHED, dry_run=False,
+            scripture_book="Matthew",
+        )
+        assert store.field_counts("scripture_book") == {"psalm": 2, "matthew": 1}
+
+    def test_only_published_filters_dry_runs(self, store: HistoryStore):
+        store.record(
+            story_hash="h1", status=STATUS_PUBLISHED, dry_run=False,
+            background_used="a.webp",
+        )
+        store.record(
+            story_hash="h2", status=STATUS_DRY_RUN, dry_run=True,
+            background_used="b.webp",
+        )
+        store.record(
+            story_hash="h3", status=STATUS_PUBLISHED, dry_run=False,
+            background_used="c.webp",
+        )
+        seq_all = store.field_sequence("background_used")
+        seq_pub = store.field_sequence("background_used", only_published=True)
+        assert seq_all == ["a.webp", "b.webp", "c.webp"]
+        assert seq_pub == ["a.webp", "c.webp"]
+
+
+class TestNewMetadataFields:
+    """Phase A metadata round-trips through the store."""
+
+    def test_record_persists_diversity_fields(self, store: HistoryStore):
+        rec = store.record(
+            story_hash="h", status=STATUS_PUBLISHED, dry_run=False,
+            story_text="full narration text here",
+            scripture_book="Matthew",
+            archetype="scripture_first",
+            primary_theme="rest",
+            secondary_themes='["rest", "peace"]',
+            tone="tender",
+            opening_pattern="reflective_question",
+            conclusion_pattern="scripture_echo",
+            caption_style="verse_first",
+            cta_pattern="comment_share",
+            key_concepts='["rest", "burden"]',
+            background_used="gospel-01.webp",
+            ambient_used="piano.wav",
+            voice_used="am_fenrir",
+        )
+        loaded = store.load_history()[0]
+        assert loaded.story_text == "full narration text here"
+        assert loaded.scripture_book == "Matthew"
+        assert loaded.archetype == "scripture_first"
+        assert loaded.primary_theme == "rest"
+        assert loaded.secondary_themes == '["rest", "peace"]'
+        assert loaded.tone == "tender"
+        assert loaded.opening_pattern == "reflective_question"
+        assert loaded.conclusion_pattern == "scripture_echo"
+        assert loaded.caption_style == "verse_first"
+        assert loaded.cta_pattern == "comment_share"
+        assert loaded.key_concepts == '["rest", "burden"]'
+        assert loaded.background_used == "gospel-01.webp"
+        assert loaded.ambient_used == "piano.wav"
+        assert loaded.voice_used == "am_fenrir"
+
+    def test_legacy_record_loads_with_defaults(self, store: HistoryStore):
+        # A record written before the diversity fields existed.
+        store.path.write_text(
+            '{"run_id":"r1","timestamp":"t","story_hash":"h1","status":"published","dry_run":false}\n',
+            encoding="utf-8",
+        )
+        rec = store.load_history()[0]
+        assert rec.archetype == ""
+        assert rec.story_text == ""
+        assert rec.background_used == ""
+        assert rec.voice_used == ""
+
+
 class TestRunRecordDataclass:
     """RunRecord serialization."""
 

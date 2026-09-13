@@ -47,12 +47,35 @@ TOTAL_PHASES = 8
 
 def _record_history(
     history,
+    content,
+    selection=None,
     **kwargs,
 ) -> None:
-    """Record a history entry, never letting history failures block the pipeline."""
+    """Record a history entry, never letting history failures block the pipeline.
+
+    ``content`` (GospelContent) and ``selection`` (media selection context)
+    supply the content-diversity + asset metadata captured in Phase A.
+    """
     if history is None:
         return
     try:
+        kwargs.setdefault("story_text", (content.narration_script or "")[:2000])
+        kwargs.setdefault("scripture_book", content.scripture_book)
+        kwargs.setdefault("archetype", content.archetype)
+        kwargs.setdefault("primary_theme", content.primary_theme)
+        kwargs.setdefault("secondary_themes", content.secondary_themes_json)
+        kwargs.setdefault("tone", content.tone)
+        kwargs.setdefault("opening_pattern", content.opening_pattern)
+        kwargs.setdefault("conclusion_pattern", content.conclusion_pattern)
+        kwargs.setdefault("caption_style", content.caption_style)
+        kwargs.setdefault("cta_pattern", content.cta_pattern)
+        kwargs.setdefault("key_concepts", content.key_concepts_json)
+        if selection:
+            kwargs.setdefault(
+                "background_used", selection.get("background", "")
+            )
+            kwargs.setdefault("ambient_used", selection.get("ambient", ""))
+            kwargs.setdefault("voice_used", selection.get("voice", ""))
         history.record(**kwargs)
     except Exception as e:
         logger.warning(f"History recording failed (non-fatal): {e}")
@@ -147,6 +170,17 @@ def main() -> int:
                 slot=settings.slot,
                 dry_run=settings.dry_run,
                 attempts=result.attempts,
+                story_text=(content.narration_script or "")[:2000],
+                scripture_book=content.scripture_book,
+                archetype=content.archetype,
+                primary_theme=content.primary_theme,
+                secondary_themes=content.secondary_themes_json,
+                tone=content.tone,
+                opening_pattern=content.opening_pattern,
+                conclusion_pattern=content.conclusion_pattern,
+                caption_style=content.caption_style,
+                cta_pattern=content.cta_pattern,
+                key_concepts=content.key_concepts_json,
             )
             return 0
         print(f"  ✓ No duplicate detected (hash={content.content_hash})")
@@ -248,11 +282,19 @@ def main() -> int:
             assets_dir=settings.background_dir,
             ambient_dir=settings.ambient_dir,
             random_ambient=settings.random_ambient,
+            history=history,
         )
         if settings.enable_background:
             background_asset = selector.select_background(prefer_gospel=True)
         if settings.enable_ambient_audio:
             ambient_asset = selector.select_ambient()
+
+        # Media selection context for history (Phase A diversity/rotation).
+        selection = {
+            "background": background_asset.path.name if background_asset else "",
+            "ambient": ambient_asset.path.name if ambient_asset else "",
+            "voice": settings.effective_kokoro_voice,
+        }
 
         renderer.render_black_video(
             narration_wav=audio_path,
@@ -317,6 +359,7 @@ def main() -> int:
             print(f"  ✓ {result.message}")
             _record_history(
                 history,
+                content=content,
                 story_hash=content_hash,
                 situation_summary=content.situation_summary,
                 scripture_reference=content.scripture_reference,
@@ -327,6 +370,7 @@ def main() -> int:
                 attempts=result.attempts,
                 tts_provider=settings.tts_provider,
                 slot=settings.slot,
+                selection=selection,
             )
         elif result.published:
             post_id = result.post_id
@@ -337,6 +381,7 @@ def main() -> int:
             logger.info(f"Reel published: post_id={post_id}")
             _record_history(
                 history,
+                content=content,
                 story_hash=content_hash,
                 situation_summary=content.situation_summary,
                 scripture_reference=content.scripture_reference,
@@ -349,6 +394,7 @@ def main() -> int:
                 attempts=result.attempts,
                 tts_provider=settings.tts_provider,
                 slot=settings.slot,
+                selection=selection,
             )
         else:
             logger.error(
@@ -361,6 +407,7 @@ def main() -> int:
         print(f"  ✗ Facebook publish error: {e}")
         _record_history(
             history,
+            content=content,
             story_hash=content_hash,
             situation_summary=content.situation_summary,
             scripture_reference=content.scripture_reference,

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from src.assets.models import Asset, AssetCategory, AssetSelection
 from src.config import settings
+from src.content.diversity import select_lsru
 
 logger = logging.getLogger(__name__)
 
@@ -36,33 +37,38 @@ class AssetSelector:
     """
     
     def __init__(
-            self,
-            assets_dir: Path | str | None = None,
-            max_assets_per_category: int = 10,
-            ambient_dir: Path | str | None = None,
-            random_background: bool = True,
-            random_ambient: bool = True,
-        ) -> None:
-            """Initialize the asset selector.
-       
-            Args:
-                assets_dir: Path to assets directory (default: from settings)
-                max_assets_per_category: Max assets to load per category
-                ambient_dir: Optional path to ambient audio dir (default: derived
-                    as <assets_dir>/../ambient, or from settings)
-                random_background: If True, pick a random background each run for
-                    variety; if False, pick the first (deterministic).
-                random_ambient: If True, pick a random ambient track each run for
-                    variety; if False, pick the first (deterministic).
-            """
-            self._assets_dir = Path(assets_dir) if assets_dir else settings.assets_dir
-            self._max_per_category = max_assets_per_category
-            self._ambient_dir_override = Path(ambient_dir) if ambient_dir else None
-            self._random_background = random_background
-            self._random_ambient = random_ambient
-            self._cache: dict[AssetCategory, list[Asset]] = {}
-        
-            logger.info(f"Asset selector initialized: {self._assets_dir}")
+                self,
+                assets_dir: Path | str | None = None,
+                max_assets_per_category: int = 10,
+                ambient_dir: Path | str | None = None,
+                random_background: bool = True,
+                random_ambient: bool = True,
+                history=None,
+            ) -> None:
+                """Initialize the asset selector.
+
+                Args:
+                    assets_dir: Path to assets directory (default: from settings)
+                    max_assets_per_category: Max assets to load per category
+                    ambient_dir: Optional path to ambient audio dir (default: derived
+                        as <assets_dir>/../ambient, or from settings)
+                    random_background: If True, pick a random background each run for
+                        variety; if False, pick the first (deterministic).
+                    random_ambient: If True, pick a random ambient track each run for
+                        variety; if False, pick the first (deterministic).
+                    history: Optional HistoryStore for rotation (Phase E+). When provided,
+                        uses weighted LSUR rotation; falls back to random.choice.
+                """
+                self._assets_dir = Path(assets_dir) if assets_dir else settings.assets_dir
+                self._max_per_category = max_assets_per_category
+                self._ambient_dir_override = Path(ambient_dir) if ambient_dir else None
+                self._random_background = random_background
+                self._random_ambient = random_ambient
+                self._history = history
+                self._cache: dict[AssetCategory, list[Asset]] = {}
+                self._rng = random.Random()
+
+                logger.info(f"Asset selector initialized: {self._assets_dir}")
     
     def scan_assets(self) -> dict[AssetCategory, list[Asset]]:
         """Scan asset directory and categorize all available media.
@@ -299,7 +305,7 @@ class AssetSelector:
         )
 
     def select_background(self, prefer_gospel: bool = True) -> Asset | None:
-        """Pick a single background for the video (random, deterministic seed ok).
+        """Pick a single background for the video (weighted LSUR if history, else random).
 
         If no backgrounds are found, returns None (caller falls back to black).
         """
@@ -307,25 +313,71 @@ class AssetSelector:
         if not bgs:
             logger.warning("No backgrounds available; will use black background")
             return None
+
+        # If history is available, use weighted LSUR rotation
+        if self._history:
+            bg_names = [a.path.name for a in bgs]
+            recent = self._history.field_sequence("background_used")
+            counts = self._history.field_counts("background_used")
+            chosen_name = select_lsru(
+                bg_names,
+                recent_keys=recent,
+                counts=counts,
+                min_spacing=2,
+                recency_weight=2.0,
+                coverage_weight=1.0,
+                rng=self._rng,
+            )
+            for a in bgs:
+                if a.path.name == chosen_name:
+                    logger.info(f"Selected background (LSUR): {a}")
+                    return a
+            # Fallback if somehow not found
+            logger.debug(f"LSUR pick {chosen_name} not in list, falling back to random")
+            return self._rng.choice(bgs)
+
+        # Fallback: original random/first behavior
         if self._random_background:
-            picked = random.choice(bgs)
+            picked = self._rng.choice(bgs)
         else:
             picked = bgs[0]
         logger.info(f"Selected background: {picked}")
         return picked
 
     def select_ambient(self) -> Asset | None:
-        """Pick a single ambient track.
+        """Pick a single ambient track (weighted LSUR if history, else random).
 
         If no ambient tracks exist, returns None (caller renders narration-only).
-        If random_ambient is True (default), picks randomly for variety.
         """
         tracks = self.list_ambient()
         if not tracks:
             logger.warning("No ambient tracks available; rendering narration-only")
             return None
+
+        # If history is available, use weighted LSUR rotation
+        if self._history:
+            track_names = [a.path.name for a in tracks]
+            recent = self._history.field_sequence("ambient_used")
+            counts = self._history.field_counts("ambient_used")
+            chosen_name = select_lsru(
+                track_names,
+                recent_keys=recent,
+                counts=counts,
+                min_spacing=2,
+                recency_weight=2.0,
+                coverage_weight=1.0,
+                rng=self._rng,
+            )
+            for a in tracks:
+                if a.path.name == chosen_name:
+                    logger.info(f"Selected ambient (LSUR): {a}")
+                    return a
+            logger.debug(f"LSUR pick {chosen_name} not in list, falling back to random")
+            return self._rng.choice(tracks)
+
+        # Fallback: original random/first behavior
         if self._random_ambient:
-            picked = random.choice(tracks)
+            picked = self._rng.choice(tracks)
             logger.info(f"Selected ambient (random): {picked}")
         else:
             picked = tracks[0]
@@ -374,6 +426,7 @@ def create_asset_selector(
     assets_dir: Path | str | None = None,
     ambient_dir: Path | str | None = None,
     random_background: bool = True,
+    history=None,
 ) -> AssetSelector:
     """Factory function to create an asset selector.
 
@@ -381,9 +434,11 @@ def create_asset_selector(
         assets_dir: Optional path to assets directory
         ambient_dir: Optional ambient audio directory
         random_background: Randomize background selection (default True)
+        history: Optional HistoryStore for rotation (Phase E+)
     """
     return AssetSelector(
         assets_dir=assets_dir,
         ambient_dir=ambient_dir,
         random_background=random_background,
+        history=history,
     )

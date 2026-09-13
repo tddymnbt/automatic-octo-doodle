@@ -43,13 +43,24 @@ class TestGospelPrompts:
 
         assert "RECENTLY USED" not in prompt
 
-    def test_system_prompt_modern_style(self):
-        """System prompt should mention the calm, mature Gospel tone."""
-        assert "warm, reverent, encouraging" in GospelPrompts.GOSPEL_SYSTEM
-        assert "pastor" in GospelPrompts.GOSPEL_SYSTEM
+    def test_base_system_prompt_mentions_tone(self):
+        """Base system prompt should mention the calm, mature Gospel tone."""
+        assert "warm, reverent, encouraging" in GospelPrompts.BASE_SYSTEM
+        assert "pastor" in GospelPrompts.BASE_SYSTEM
         # ASMR/whisper/horror only appears as "Avoids:" negations, never as the voice style
-        assert "Avoids: ASMR language" in GospelPrompts.GOSPEL_SYSTEM
-        assert "Avoids:" in GospelPrompts.GOSPEL_SYSTEM
+        assert "Avoids: ASMR language" in GospelPrompts.BASE_SYSTEM
+        assert "Avoids:" in GospelPrompts.BASE_SYSTEM
+
+    def test_all_archetypes_have_systems(self):
+        """Each archetype should have a system prompt."""
+        for arch in GospelPrompts.ARCHETYPE_SYSTEMS:
+            system = GospelPrompts.ARCHETYPE_SYSTEMS[arch]
+            # Check that the archetype name (with underscores replaced) appears
+            # in some form (e.g., "CHARACTER / STORY" for "character_story")
+            arch_words = arch.replace("_", " ")
+            # Be lenient: just check at least one word from the archetype appears
+            words = arch_words.split()
+            assert any(word.upper() in system for word in words)
 
     def test_safety_prompt_formatting(self):
         """Safety prompt should format correctly."""

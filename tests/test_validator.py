@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.content.prompts import GospelPrompts
 from src.content.schema import GospelContent
 from src.content.validator import GospelValidator
 
@@ -179,3 +180,82 @@ class TestSafetyValidation:
             make_content(situation_summary="exposed to violent crime in the neighborhood")
         )
         assert any("unsafe language" in w for w in result.warnings)
+
+
+class TestCheckDiversity:
+    """Near-duplicate detection via Jaccard similarity."""
+
+    def test_empty_history_valid(self, validator):
+        """No history -> diversity check passes (valid)."""
+        result = validator.check_diversity(make_content(), [])
+        assert result.is_valid is True
+
+    def test_distinct_content_valid(self, validator):
+        """A clearly different story passes."""
+        content = make_content(
+            narration_script="The lilies of the field do not toil. God clothes creation in beauty.",
+        )
+        history = [
+            "The frantic pace of the city never lets you rest or find peace anywhere.",
+            "Greed in the marketplace twists good gifts into chains that bind us all.",
+        ]
+        result = validator.check_diversity(content, history)
+        assert result.is_valid is True
+
+    def test_near_duplicate_story_flagged(self, validator):
+        """A near-identical story fails."""
+        content = make_content(
+            narration_script="The shepherd leads me beside still waters and restores my weary soul.",
+        )
+        history = [
+            "The shepherd leads me beside still waters and restores my weary soul each day.",
+        ]
+        result = validator.check_diversity(content, history)
+        assert not result.is_valid
+        assert any("Narration too similar" in e for e in result.errors)
+
+    def test_caption_duplication_flagged(self, validator):
+        """A near-identical caption fails."""
+        content = make_content(
+            facebook_caption="Cast every burden on Him for He cares for you. Rest in His peace.",
+        )
+        content.narration_script = "a completely unrelated narration about mountains and valleys"
+        history_texts = ["unrelated history text entirely"]
+        history_captions = ["Cast every burden on Him for He cares for you. Rest in His peace."]
+        result = validator.check_diversity(
+            content, history_texts, history_captions=history_captions
+        )
+        assert not result.is_valid
+        assert any("Caption too similar" in e for e in result.errors)
+
+
+class TestCaptionCtaVariety:
+    """Verify caption/CTA variety is possible (structure-driven)."""
+
+    def test_all_cta_patterns_are_unique(self):
+        """CTA_PATTERNS contains no duplicates."""
+        from src.content.diversity import CTA_PATTERNS
+
+        assert len(CTA_PATTERNS) == len(set(CTA_PATTERNS))
+        assert len(CTA_PATTERNS) >= 12  # at least a dozen variants
+
+    def test_all_caption_styles_are_unique(self):
+        """CAPTION_STYLES contains no duplicates."""
+        from src.content.diversity import CAPTION_STYLES
+
+        assert len(CAPTION_STYLES) == len(set(CAPTION_STYLES))
+        assert len(CAPTION_STYLES) >= 6
+
+    def test_prompt_includes_cta_pattern_when_provided(self):
+        """Gospel prompt includes CTA pattern directive."""
+        prompt = GospelPrompts.gospel_prompt(
+            cta_pattern="affirm_truth",
+        )
+        assert "cta_pattern: affirm_truth" in prompt
+
+    def test_prompt_includes_caption_style_when_provided(self):
+        """Gospel prompt includes caption style directive."""
+        prompt = GospelPrompts.gospel_prompt(
+            caption_style="devotional_style",
+        )
+        assert "caption_style: devotional_style" in prompt

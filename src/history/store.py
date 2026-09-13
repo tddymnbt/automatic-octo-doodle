@@ -63,6 +63,24 @@ class RunRecord:
     asset_count: int = 0
     tts_provider: str = ""
 
+    # === Content-diversity metadata (Phase A+) ===
+    # Stored so rotation/scoring can query dimensions the exact-hash
+    # never covered. Empty defaults keep legacy JSONL records loadable.
+    story_text: str = ""
+    scripture_book: str = ""
+    archetype: str = ""
+    primary_theme: str = ""
+    secondary_themes: str = ""  # JSON-encoded list for the JSONL row
+    tone: str = ""
+    opening_pattern: str = ""
+    conclusion_pattern: str = ""
+    caption_style: str = ""
+    cta_pattern: str = ""
+    key_concepts: str = ""  # JSON-encoded list
+    background_used: str = ""
+    ambient_used: str = ""
+    voice_used: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary (JSON-safe)."""
         return asdict(self)
@@ -130,6 +148,20 @@ class HistoryStore:
         duration_s: float = 0.0,
         asset_count: int = 0,
         tts_provider: str = "",
+        story_text: str = "",
+        scripture_book: str = "",
+        archetype: str = "",
+        primary_theme: str = "",
+        secondary_themes: str = "",
+        tone: str = "",
+        opening_pattern: str = "",
+        conclusion_pattern: str = "",
+        caption_style: str = "",
+        cta_pattern: str = "",
+        key_concepts: str = "",
+        background_used: str = "",
+        ambient_used: str = "",
+        voice_used: str = "",
     ) -> RunRecord:
         """Build and record a run in one call."""
         record = RunRecord(
@@ -150,6 +182,20 @@ class HistoryStore:
             duration_s=duration_s,
             asset_count=asset_count,
             tts_provider=tts_provider,
+            story_text=story_text,
+            scripture_book=scripture_book,
+            archetype=archetype,
+            primary_theme=primary_theme,
+            secondary_themes=secondary_themes,
+            tone=tone,
+            opening_pattern=opening_pattern,
+            conclusion_pattern=conclusion_pattern,
+            caption_style=caption_style,
+            cta_pattern=cta_pattern,
+            key_concepts=key_concepts,
+            background_used=background_used,
+            ambient_used=ambient_used,
+            voice_used=voice_used,
         )
         self.record_run(record)
         return record
@@ -244,3 +290,65 @@ class HistoryStore:
             and r.status == STATUS_PUBLISHED
             and not r.dry_run
         ]
+
+    # ------------------------------------------------------------------
+    # Diversity / rotation queries (Phase A+)
+    # ------------------------------------------------------------------
+
+    def field_sequence(
+        self,
+        field: str,
+        *,
+        only_published: bool = False,
+    ) -> list[str]:
+        """Return the sequence of a record field's non-empty values, in order.
+
+        Used to drive recency/coverage rotation. ``only_published=True``
+        ignores dry-run/duplicate/failed records so only real publishes
+        count toward rotation content.
+        """
+        values: list[str] = []
+        for record in self.load_history():
+            if only_published and (
+                record.status != STATUS_PUBLISHED or record.dry_run
+            ):
+                continue
+            value = getattr(record, field, "") or ""
+            if value:
+                values.append(value)
+        return values
+
+    def field_counts(
+        self,
+        field: str,
+        *,
+        only_published: bool = False,
+    ) -> dict[str, int]:
+        """Return a usage map of a record field's values (capitalize-canonical).
+
+        Values are deduped by case-insensitive name (e.g. ``psalm`` and
+        ``Psalm`` collapse) for fair rotation.
+        """
+        counts: dict[str, int] = {}
+        for value in self.field_sequence(field, only_published=only_published):
+            key = value.lower()
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def last_used(
+        self,
+        field: str,
+        key: str,
+        *,
+        only_published: bool = False,
+    ) -> int:
+        """Return how many records back ``key`` last appeared in ``field``.
+
+        0 = the most recent record; a large number = never/very old. Used to
+        enforce asset and content recency spacing.
+        """
+        seq = self.field_sequence(field, only_published=only_published)
+        deltas = [
+            len(seq) - 1 - i for i, value in enumerate(seq) if value.lower() == key.lower()
+        ]
+        return min(deltas) if deltas else len(seq)

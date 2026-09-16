@@ -155,7 +155,7 @@ Facebook Page
 - [x] Add `TTS_PROVIDER=kokoro`, `KOKORO_*`, `DATA_DIR=data` env to workflow
 - [x] `workflow_dispatch.dry_run` input maps to `DRY_RUN` env (scheduled/dispatch run live)
 - [x] `concurrency: asmr-pipeline` guard — no concurrent pipeline runs (duplicate/race protection)
-- [x] Git-backed history persistence: `persist-history` job commits `data/run_history.jsonl` (`if: always()`, `contents: write`, `continue-on-error`)
+- [x] Git-backed history persistence: `persist-history` job (`if: always()`, `contents: write`, `continue-on-error`) — **note:** file now crossed via artifact upload/download between `generate-and-publish` and `persist-history` (different VMs; see Phase 15)
 - [x] Debug artifact upload (`upload_artifact` input, gated, 7-day retention)
 - [x] New `.github/workflows/ci.yml` — pytest + ruff on push/PR
 - [x] New `ruff.toml` — project conventions (BLE001/PLW1510/RUF012/PERF102/EXE001 ignored; test per-file ignores)
@@ -199,6 +199,23 @@ Facebook Page
 - [x] Safe diagnostics + secret scan documented in README.md Development section
 - [x] Definition of Done updated in PLAN.md
 
+### Phase 15 — History Persistence Fix + 30-Day Scripture Cooldown ✅
+- [x] **Bug fixed (duplicates):** `persist-history` never actually committed history because it ran on a **separate VM** and did a fresh checkout that always matched the branch (no diff). `generate-and-publish` now uploads `data/run_history.jsonl` as an artifact and `persist-history` downloads it before committing — the modified file actually reaches the repo.
+- [x] `ScriptureCooldown` in `src/history/store.py` — normalizes `Book chapter:verse` references (`Matthew 1:16` → `matthew 1:16`) and blocks any **exact** reference from republishing within a 30-day window (only `status == published`, non dry-run count; dry-runs/failures never block)
+- [x] `recent_normalized(days)` / `is_on_cooldown()` on `ScriptureCooldown`; `_normalize_scripture()` helper handles multi-word / ordinal books and chapter:verse ranges
+- [x] `GospelGenerator.generate(blocked_scriptures=...)` re-rolls when the model returns an on-cooldown verse (bounded by `max_attempts`)
+- [x] `GospelPrompts.gospel_prompt()` accepts `blocked_scriptures` and injects a **"🚫 HARD BLOCK — DO NOT USE"** section into the LLM prompt
+- [x] `main.py` Phase 2 builds the cooldown list from live published history before generation (fails gracefully to no-op if history unavailable)
+- [x] Tests: `tests/test_scripture_cooldown.py` — 3 new (normalization, verse-level gating within/outside window, dry-run/failure exclusion)
+- [x] Full suite: 367 passed (3 pre-existing unrelated failures in `test_facebook_reels.py` / `test_ffmpeg.py`); all modified files `py_compile` clean
+
+### Phase 16 — Strict Round-Robin Asset Cycling ✅
+- [x] `select_round_robin()` in `src/content/diversity.py` — strict full-cycle selection: picks the least-recently-used option, prioritizing never-used assets so the **entire library is exhausted before any repeat**; deterministic within a cycle (list-order tiebreak)
+- [x] `AssetSelector.select_background()` / `select_ambient()` in `src/assets/selector.py` — replaced weighted `select_lsru` with `select_round_robin` (reads `field_sequence("background_used")` / `field_sequence("ambient_used")`; no longer needs `field_counts`)
+- [x] Both background (21 gospel WebP) and ambient (6 piano WAV) now cycle through all assets before reusing any
+- [x] Tests: `tests/test_round_robin.py` (6 new: unused-first, mid-cycle LRU, never-used-beats-oldest, empty, absent-key, tie determinism); `tests/test_asset_selector.py` updated (2 renamed to round-robin + full-cycle exhaust check)
+- [x] Full suite: 377 passed (same 3 pre-existing unrelated failures); all modified files `py_compile` clean
+
 ---
 
 ## Secret Management
@@ -235,6 +252,8 @@ The project is complete when all are true:
 - [x] Video is validated before publishing
 - [x] Facebook Reel is published successfully
 - [x] Duplicate content is prevented
+- [x] No exact bible reference is republished within 30 days (`ScriptureCooldown`)
+- [x] Every background / ambient asset is used once before any repeats (strict round-robin)
 - [x] History is saved
 - [x] Invalid Facebook token stops safely
 - [x] GitHub Actions runs end-to-end

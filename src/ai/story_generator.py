@@ -32,6 +32,7 @@ from src.content.diversity import (
 from src.content.prompts import GospelPrompts
 from src.content.schema import GospelContent
 from src.content.validator import GospelValidator, ValidationResult
+from src.history.store import _normalize_scripture
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +88,16 @@ class GospelGenerator:
         self,
         language: str | None = None,
         max_attempts: int = 3,
+        blocked_scriptures: list[str] | None = None,
     ) -> GenerationResult:
         """Generate a new Gospel content piece.
 
         Args:
             language: Content language (default: from settings)
             max_attempts: Maximum generation attempts
+            blocked_scriptures: Scriptures on cooldown (exact refs) that must
+                be avoided. Candputed in ``main`` from history and enforced
+                here so regeneration naturally avoids them.
 
         Returns:
             GenerationResult with content or error
@@ -107,10 +112,28 @@ class GospelGenerator:
 
             try:
                 # Generate content
-                content = self._call_gemini(language)
+                content = self._call_gemini(language, blocked_scriptures)
 
                 # Compute content hash
                 content.content_hash = self._compute_hash(content)
+
+                # Hard cooldown gate: reject a scripture that was recently used
+                if blocked_scriptures:
+                    norm_ref = _normalize_scripture(content.scripture_reference)
+                    norm_blocked = {
+                        _normalize_scripture(v)
+                        for v in blocked_scriptures
+                        if _normalize_scripture(v)
+                    }
+                    if norm_ref and norm_ref in norm_blocked:
+                        logger.warning(
+                            f"Scripture on cooldown (attempt {attempt}): "
+                            f"{content.scripture_reference} — regenerating"
+                        )
+                        last_error = (
+                            f"Scripture on cooldown: {content.scripture_reference}"
+                        )
+                        continue
 
                 # Validate
                 validation = self._validator.validate(content)
@@ -155,7 +178,9 @@ class GospelGenerator:
             generation_time_ms=elapsed,
         )
 
-    def _call_gemini(self, language: str) -> GospelContent:
+    def _call_gemini(
+        self, language: str, blocked_scriptures: list[str] | None = None
+    ) -> GospelContent:
         """Call Gemini API to generate Gospel content with archetype/rotation logic.
 
         Args:
@@ -280,6 +305,7 @@ class GospelGenerator:
             conclusion_pattern=conclusion_pattern,
             caption_style=caption_style,
             cta_pattern=cta_pattern,
+            blocked_scriptures=blocked_scriptures,
         )
 
         # Call API with archetype-specific system prompt

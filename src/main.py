@@ -134,9 +134,25 @@ def main() -> int:
     print(f"[2/{TOTAL_PHASES}] Generating Gospel content...")
     try:
         from src.ai.story_generator import GospelGenerator
+        from src.history.store import HistoryStore, ScriptureCooldown
+
+        # Compute scripture cooldown from published history (30-day window)
+        blocked_scriptures: list[str] = []
+        try:
+            cooldown = ScriptureCooldown(HistoryStore(), cooldown_days=30)
+            blocked_scriptures = list(
+                cooldown.recent_normalized(only_published=True).values()
+            )
+            if blocked_scriptures:
+                logger.info(
+                    f"Scripture cooldown active: {len(blocked_scriptures)} "
+                    "recently used scripture(s) blocked from republishing."
+                )
+        except Exception as e:
+            logger.warning(f"Could not load scripture cooldown; continuing: {e}")
 
         generator = GospelGenerator()
-        result = generator.generate()
+        result = generator.generate(blocked_scriptures=blocked_scriptures)
 
         if not result.success:
             logger.error(f"Gospel content generation failed: {result.error}")

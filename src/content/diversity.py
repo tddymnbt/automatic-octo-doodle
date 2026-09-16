@@ -351,6 +351,55 @@ def select_lsru(
     return candidates[0][0]
 
 
+def select_round_robin(
+    options: Sequence[str],
+    recent_keys: Sequence[str],
+    rng: random.Random | None = None,
+) -> str:
+    """Strict full-cycle selection: use ALL options before reusing any.
+
+    Picks the option that has gone the longest without being selected
+    (least recently used). Unused options are prioritized over used ones,
+    so the entire library is exhausted before anything repeats — a true
+    round-robin distinct from ``select_lsru``'s weighted heuristic.
+
+    - ``options``: the available asset keys (e.g. filenames).
+    - ``recent_keys``: earlier-selected keys in order (oldest -> newest).
+      ``last_used`` = number of options selected since this one last
+      appeared; 0 = just used, ``len(recent_keys)`` = never used (highest
+      priority).
+    - Ties (multiple never-used options, or a fresh cycle start) are broken
+      by list order so the cycle repeats deterministically in library order.
+
+    This guarantees full coverage before any repeat, at the cost of being
+    predictable within a cycle (acceptable for asset variety).
+    """
+    rng = rng or random.Random()
+    if not options:
+        return ""
+    # last-seen position per key (index in recent_keys of its most recent
+    # occurrence); None if never used (highest priority).
+    last_seen: dict[str, int | None] = {}
+    for key in options:
+        last_seen[key] = None
+    for i, key in enumerate(recent_keys):
+        if key in last_seen:
+            last_seen[key] = i
+
+    # Prefer the option that hasn't been used at all, else the oldest used
+    # (smallest most-recent-use index = furthest back in the record).
+    def _rank(key: str) -> tuple[int, int]:
+        seen = last_seen.get(key)
+        if seen is None:
+            return (0, 0)  # never used -> picked first (list order tiebreak)
+        return (1, seen)  # used -> smallest seen index first (most stale)
+
+    candidates = sorted(options, key=_rank)
+    # Deterministic: pick the highest-priority option. (rng unused but kept
+    # for API symmetry; list order provides stability within a cycle.)
+    return candidates[0]
+
+
 def select_opening_pattern(
     recent_openings: Sequence[str],
     counts: dict[str, int] | None = None,

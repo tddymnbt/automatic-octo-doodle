@@ -24,8 +24,10 @@ Design notes:
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -352,3 +354,87 @@ class HistoryStore:
             len(seq) - 1 - i for i, value in enumerate(seq) if value.lower() == key.lower()
         ]
         return min(deltas) if deltas else len(seq)
+
+
+# ------------------------------------------------------------------
+# Scripture cooldown (Phase: hard dedup)
+# ------------------------------------------------------------------
+
+#: Regex capturing ``Book Chapter:Verse`` (supports multi-word books like
+#: "1 Corinthians", and chapter:verse "3:5-6", "3:5,7", or bare "3:5").
+_SCRIPTURE_RE = re.compile(
+    r"^\s*(?P<book>[\d]?\s*[A-Za-z][A-Za-z_\- .]*)"
+    r"(?P<ref>\d+\s*:\s*[\d\,\.\-]+)\s*$"
+)
+
+
+def _normalize_scripture(reference: str) -> str | None:
+    """Normalize a scripture reference to ``Book chapter:verse`` (lowercased).
+
+    Returns ``None`` if the reference doesn't parse as a normal
+    book/chapter/verse form (so malformed/odd refs are skipped rather than
+    blocking everything).
+    """
+    ref = reference.strip()
+    if not ref:
+        return None
+    m = _SCRIPTURE_RE.match(ref)
+    if not m:
+        return None
+    book = re.sub(r"\s+", " ", m.group("book")).strip().rstrip("- ").lower()
+    chap_verse = re.sub(r"\s+", "", m.group("ref")).lower()
+    if not book or not chap_verse:
+        return None
+    return f"{book} {chap_verse}"
+
+
+class ScriptureCooldown:
+    """Resolve which scripture references are in cooldown.
+
+    A reference is ``in`` cooldown if a *published* run used it within
+    ``cooldown_days`` (default 30). Only exact ``Book chapter:verse``
+    matches block publishing — e.g. ``matthew 1:16`` blocks ``matthew 1:16``
+    but not ``matthew 1:17`` or ``matthew 2:1``.
+    """
+
+    def __init__(self, store: HistoryStore, cooldown_days: int = 30) -> None:
+        self._store = store
+        self.cooldown_days = cooldown_days
+
+    def recent_normalized(self, *, only_published: bool = True, days: int | None = None) -> dict[str, str]:
+        """Return a map ``{normalized_reference: raw_reference}`` of scripture
+        refs seen in published runs within the (overridable) cooldown window.
+
+        ``days`` defaults to ``cooldown_days`` (so the map matches the gate).
+        """
+        days = days if days is not None else self.cooldown_days
+        cutoff = (
+            _dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=days)
+        )
+        seen: dict[str, str] = {}
+        for record in self._store.load_history():
+            if only_published and (
+                record.status != STATUS_PUBLISHED or record.dry_run
+            ):
+                continue
+            ts = record.timestamp
+            if not ts:
+                continue
+            try:
+                when = _dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                when = None
+            if when is None or when < cutoff:
+                continue
+            norm = _normalize_scripture(record.scripture_reference)
+            if norm:
+                seen[norm] = record.scripture_reference
+        return seen
+
+    def is_on_cooldown(self, reference: str, *, days: int | None = None) -> bool:
+        """Return True if ``reference`` (or its normalized form) is on cooldown."""
+        norm = _normalize_scripture(reference)
+        if not norm:
+            return False
+        return norm in self.recent_normalized(only_published=True, days=days)

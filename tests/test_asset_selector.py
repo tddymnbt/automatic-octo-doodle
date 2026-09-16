@@ -331,7 +331,7 @@ class TestAssetSelectorGospelAmbient:
 
 
 class TestAssetSelectorRotation:
-    """Test LSUR rotation when history is provided."""
+    """Test round-robin rotation when history is provided."""
 
     @pytest.fixture
     def gospel_dir(self):
@@ -349,29 +349,41 @@ class TestAssetSelectorRotation:
 
     @pytest.fixture
     def mock_history(self):
-        """Mock HistoryStore with field_sequence/field_counts."""
+        """A real-ish history mock with field_sequence (round-robin needs only this)."""
         from unittest.mock import MagicMock
 
         mock = MagicMock()
         mock.field_sequence.side_effect = lambda field, only_published=False: []
-        mock.field_counts.side_effect = lambda field, only_published=False: {}
         return mock
 
-    def test_select_background_uses_lsur_with_history(self, gospel_dir, mock_history):
+    def test_select_background_uses_round_robin_with_history(self, gospel_dir, mock_history):
         base, _, _ = gospel_dir
         sel = AssetSelector(assets_dir=base, history=mock_history)
         bg = sel.select_background(prefer_gospel=True)
         assert bg is not None
+        # round-robin reads recent sequence (not field_counts)
         mock_history.field_sequence.assert_called_with("background_used")
-        mock_history.field_counts.assert_called_with("background_used")
+        mock_history.field_counts.assert_not_called()
 
-    def test_select_ambient_uses_lsur_with_history(self, gospel_dir, mock_history):
+    def test_select_ambient_uses_round_robin_with_history(self, gospel_dir, mock_history):
         base, _, ambient_dir = gospel_dir
         sel = AssetSelector(assets_dir=base, ambient_dir=ambient_dir, history=mock_history)
         track = sel.select_ambient()
         assert track is not None
         mock_history.field_sequence.assert_called_with("ambient_used")
-        mock_history.field_counts.assert_called_with("ambient_used")
+        mock_history.field_counts.assert_not_called()
+
+    def test_full_cycle_exhausts_before_repeat(self, gospel_dir):
+        """All backgrounds used once before any 2nd use; oldest recycled first."""
+        from src.content.diversity import select_round_robin
+
+        names = ["a", "b", "c"]
+        seq = []
+        for _ in range(8):
+            seq.append(select_round_robin(names, seq))
+        # First cycle covers a,b,c (no repeat within); second cycle reuses oldest.
+        assert seq[:3] == ["a", "b", "c"]
+        assert seq[3] == "a"  # oldest recycled first
 
     def test_fallbacks_to_random_when_no_history(self, gospel_dir):
         base, _, ambient_dir = gospel_dir

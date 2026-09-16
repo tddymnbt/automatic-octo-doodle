@@ -296,6 +296,7 @@ Preferred CTA patterns: seasonal_practice, comment_share, reflection_prompt
         conclusion_pattern: str | None = None,
         caption_style: str | None = None,
         cta_pattern: str | None = None,
+        blocked_scriptures: list[str] | None = None,
     ) -> str:
         """Generate the Gospel content creation prompt.
 
@@ -309,6 +310,8 @@ Preferred CTA patterns: seasonal_practice, comment_share, reflection_prompt
             avoid_principles: Principles used too recently (rotation guidance)
             avoid_verses: Verses/books used too recently
             avoid_openings: Opening patterns used too recently
+            blocked_scriptures: HARD-blocked scripture references (on cooldown).
+                The model must NOT use any of these — non-negotiable.
 
         Returns:
             Formatted prompt string
@@ -342,6 +345,15 @@ Preferred CTA patterns: seasonal_practice, comment_share, reflection_prompt
             avoid_openings_block = (
                 "\n\nAVOID THESE OPENING PATTERNS (used recently):\n"
                 + "\n".join(f"- {o}" for o in avoid_openings)
+            )
+
+        # HARD block list (scriptures on cooldown) — non-negotiable
+        blocked_block = ""
+        if blocked_scriptures:
+            blocked_block = (
+                "\n\n🚫 HARD BLOCK — DO NOT USE ANY OF THESE SCRIPTURES (30-day cooldown, cannot be used):\n"
+                + "\n".join(f"- {v}" for v in blocked_scriptures)
+                + "\nChoose a COMPLETELY DIFFERENT scripture reference that is NOT in the hard-block list."
             )
 
         # Recent entries block (from history) — kept for exact-dup avoidance
@@ -393,6 +405,7 @@ REQUIREMENTS:
 
 {archetype_hint}
 {avoid_verses_block}
+{blocked_block}
 {avoid_openings_block}
 {recent_block}
 {pattern_block}

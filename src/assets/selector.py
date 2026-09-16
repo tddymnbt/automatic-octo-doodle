@@ -12,7 +12,7 @@ from pathlib import Path
 
 from src.assets.models import Asset, AssetCategory, AssetSelection
 from src.config import settings
-from src.content.diversity import select_lsru
+from src.content.diversity import select_round_robin
 
 logger = logging.getLogger(__name__)
 
@@ -314,26 +314,18 @@ class AssetSelector:
             logger.warning("No backgrounds available; will use black background")
             return None
 
-        # If history is available, use weighted LSUR rotation
+        # If history is available, use strict round-robin rotation so every
+        # background is used before any is reused (full-cycle loop).
         if self._history:
             bg_names = [a.path.name for a in bgs]
             recent = self._history.field_sequence("background_used")
-            counts = self._history.field_counts("background_used")
-            chosen_name = select_lsru(
-                bg_names,
-                recent_keys=recent,
-                counts=counts,
-                min_spacing=2,
-                recency_weight=2.0,
-                coverage_weight=1.0,
-                rng=self._rng,
-            )
+            chosen_name = select_round_robin(bg_names, recent)
             for a in bgs:
                 if a.path.name == chosen_name:
-                    logger.info(f"Selected background (LSUR): {a}")
+                    logger.info(f"Selected background (round-robin): {a}")
                     return a
             # Fallback if somehow not found
-            logger.debug(f"LSUR pick {chosen_name} not in list, falling back to random")
+            logger.debug(f"Round-robin pick {chosen_name} not in list, falling back to random")
             return self._rng.choice(bgs)
 
         # Fallback: original random/first behavior
@@ -354,25 +346,17 @@ class AssetSelector:
             logger.warning("No ambient tracks available; rendering narration-only")
             return None
 
-        # If history is available, use weighted LSUR rotation
+        # If history is available, use strict round-robin rotation so every
+        # ambient track is used before any is reused (full-cycle loop).
         if self._history:
             track_names = [a.path.name for a in tracks]
             recent = self._history.field_sequence("ambient_used")
-            counts = self._history.field_counts("ambient_used")
-            chosen_name = select_lsru(
-                track_names,
-                recent_keys=recent,
-                counts=counts,
-                min_spacing=2,
-                recency_weight=2.0,
-                coverage_weight=1.0,
-                rng=self._rng,
-            )
+            chosen_name = select_round_robin(track_names, recent)
             for a in tracks:
                 if a.path.name == chosen_name:
-                    logger.info(f"Selected ambient (LSUR): {a}")
+                    logger.info(f"Selected ambient (round-robin): {a}")
                     return a
-            logger.debug(f"LSUR pick {chosen_name} not in list, falling back to random")
+            logger.debug(f"Round-robin pick {chosen_name} not in list, falling back to random")
             return self._rng.choice(tracks)
 
         # Fallback: original random/first behavior

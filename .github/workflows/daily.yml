@@ -134,7 +134,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # 8. Cleanup temporary files (safe - no secrets)
+      # 8. Upload run history as artifact for the persist-history job
+      #    (jobs run on different VMs; this bridges the filesystem gap)
+      - name: Upload run history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-history
+          path: data/run_history.jsonl
+          if-no-files-found: warn
+          retention-days: 1
+
+      # 9. Cleanup temporary files (safe - no secrets)
       - name: Cleanup temporary files
         if: always()
         run: |
@@ -157,6 +168,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Fetch the history file written by the generate-and-publish job
+      # (different VM — artifact bridge is the only way to share state)
+      - name: Download run history artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: run-history
+          path: data/
 
       - name: Commit run history
         run: |

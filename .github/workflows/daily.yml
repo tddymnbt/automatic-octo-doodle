@@ -172,7 +172,7 @@ jobs:
       # Fetch the history file written by the generate-and-publish job
       # (different VM — artifact bridge is the only way to share state)
       - name: Download run history artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: run-history
           path: data/

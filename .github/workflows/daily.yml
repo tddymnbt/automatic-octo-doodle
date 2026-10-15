@@ -85,7 +85,7 @@ jobs:
     steps:
       # 1. Checkout (fetch LFS media so the runner has real background/ambient files)
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           lfs: true
 
@@ -167,7 +167,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Fetch the history file written by the generate-and-publish job
       # (different VM — artifact bridge is the only way to share state)
